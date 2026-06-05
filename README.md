@@ -15,8 +15,6 @@ CaSPECT integrates **causal discovery**, **average treatment effect estimation**
 * [Installation](#️-installation)
 * [Usage](#-usage)
 * [Experimental Results](#-experimental-results)
-* [Ablation Studies](#-ablation-studies)
-* [Theoretical Guarantees](#-theoretical-guarantees)
 * [Citation](#-citation)
 
 ---
@@ -250,89 +248,6 @@ CaSPECT identifies latent treatment-effect heterogeneity and discovers causally 
 ## 401(k) Dataset
 
 The framework uncovers heterogeneous retirement-savings effects and demonstrates scalability to larger observational datasets.
-
----
-
-# 🔬 Ablation Studies
-
-Extensive ablations validate the importance of each component.
-
-## 1. OVS vs PC-Only Orientation
-
-Removing LiNGAM evidence reduces orientation accuracy and increases DAG ambiguity.
-
-## 2. Bootstrap Stability Weighting
-
-Replacing
-
-[
-A^{stable}_{uv}
-===============
-
-f_{uv}A_{uv}
-]
-
-with unweighted edges introduces spurious causal connections and degrades embedding quality.
-
-## 3. Edge Contraction vs Symmetrization
-
-Symmetrization creates artificial cycles
-
-[
-u \rightarrow v \rightarrow u
-]
-
-which violate DAG assumptions.
-
-Edge contraction preserves acyclicity and causal interpretability.
-
----
-
-# 📐 Theoretical Guarantees
-
-### Proposition 1: OVS Consistency
-
-The Orientation Validation Score satisfies
-
-[
-OVS_{uv}
-\xrightarrow{a.s.}
-\pm 1
-]
-
-for all true edges.
-
----
-
-### Theorem 1: Consistent Causal Edge Weights
-
-Bootstrap-weighted adjacency entries converge to the true ACE magnitudes:
-
-[
-A^{stable}*{uv}
-\xrightarrow{a.s.}
-|\tau*{uv}|
-]
-
----
-
-### Spectral Stability
-
-Applying Davis–Kahan perturbation theory yields
-
-[
-|
-\sin\Theta(V_K,\hat V_K)
-|_F
-===
-
-O!\left(
-\frac{|V|}
-{\delta_{K^*}\sqrt n}
-\right)
-]
-
-ensuring stable spectral embeddings as sample size grows.
 
 ---
 

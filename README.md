@@ -44,11 +44,11 @@ For every candidate edge ((u,v)),
 
 where
 
-* (f_{uv}) = bootstrap inclusion frequency
-* (\rho_{uv}) = orientation frequency
-* (\hat B_{uv}) = DirectLiNGAM coefficient
-* (w_{PC}=0.8)
-* (w_L=0.2)
+* $(f_{uv})$ = bootstrap inclusion frequency
+* $(\rho_{uv})$ = orientation frequency
+* $(\hat B_{uv})$ = DirectLiNGAM coefficient
+* $(w_{PC}=0.8)$
+* $(w_L=0.2)$
 
 The score combines causal discovery and non-Gaussian identifiability information to orient DAG edges robustly.
 

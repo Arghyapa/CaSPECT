@@ -83,7 +83,7 @@ Bootstrap PC Algorithm
 
 For every candidate edge ((u,v)),
 
-[
+$$
 \text{OVS}_{uv}
 ===============
 
@@ -91,7 +91,7 @@ w_{PC}f_{uv}(\rho_{uv}-\rho_{vu})
 +
 w_L \operatorname{sign}
 (\hat B_{uv}-\hat B_{vu})
-]
+$$
 
 where
 

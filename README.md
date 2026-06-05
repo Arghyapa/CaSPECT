@@ -42,7 +42,7 @@ Unlike propensity-score matching, trimming, or manual subgroup construction, CaS
 For every candidate edge ((u,v)),
 
 
-  $$ \mathrm{OVS}_{uv} = w_{\mathrm{PC}} \cdot f_{uv} \cdot \underbrace{(\rho_{uv} - \rho_{vu})}_{\delta_{uv}^{\mathrm{PC}}} + w_L \cdot \underbrace{sign(\hat{B}_{uv} - \hat{B}_{vu})}_{\delta_{uv}^{L}},$$
+  $$ \mathrm{OVS}_{uv} = w_{\mathrm{PC}} \cdot f_{uv} \cdot (\rho_{uv} - \rho_{vu}) + w_L \cdot {sign(\hat{B}_{uv} -\hat{B}_{vu})}, $$
 
 where
 

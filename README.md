@@ -36,61 +36,13 @@ CaSPECT addresses this challenge by:
 
 Unlike propensity-score matching, trimming, or manual subgroup construction, CaSPECT discovers comparable populations automatically through causal geometry.
 
----
-
-# 🧠 Methodology
-
-The complete workflow consists of four major stages:
-
-```text
-Observational Data
-        │
-        ▼
-Bootstrap PC Algorithm
-        │
-        ▼
- Stable Skeleton Recovery
-        │
-        ▼
- Orientation Validation Score (OVS)
-        │
-        ▼
- Fully Oriented DAG
-        │
-        ▼
- Backdoor Adjustment
-        │
-        ▼
- ACE Estimation (OLS / DML)
-        │
-        ▼
- Weighted Causal Graph
-        │
-        ▼
- Chung Directed Laplacian
-        │
-        ▼
- Spectral Embedding
-        │
-        ▼
- k-Means Clustering
-        │
-        ▼
- Causally Homogeneous Subgroups
-```
 
 ### Orientation Validation Score (OVS)
 
 For every candidate edge ((u,v)),
 
 
-  $$
-  \OVS_{uv}
-   = w_{\mathrm{PC}} \cdot f_{uv}
-     \cdot \underbrace{(\rho_{uv} - \rho_{vu})}_{\delta_{uv}^{\mathrm{PC}}}
-   + w_L \cdot
-     \underbrace{\sign(\hat{B}_{uv} - \hat{B}_{vu})}_{\delta_{uv}^{L}},
-$$
+  $$ \OVS_{uv} = w_{\mathrm{PC}} \cdot f_{uv} \cdot \underbrace{(\rho_{uv} - \rho_{vu})}_{\delta_{uv}^{\mathrm{PC}}} + w_L \cdot \underbrace{\sign(\hat{B}_{uv} - \hat{B}_{vu})}_{\delta_{uv}^{L}},$$
 
 where
 
@@ -130,9 +82,7 @@ Directed edges are weighted by backdoor-identified Average Treatment Effects:
 
 CaSPECT employs Chung's Directed Laplacian
 
-[
-L = I - \frac{1}{2}(P + P^*)
-]
+$$ L = I - \frac{1}{2}(P + P^*) $$
 
 to capture causal diffusion over the graph.
 

@@ -107,7 +107,6 @@ under standard causal assumptions.
 ├── LICENSE
 ├── README.md
 ├── main_pipeline.py
-├── run_all.sh
 
 ├── src/
 │   ├── caspect.py

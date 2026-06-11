@@ -6,15 +6,7 @@ from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 from scipy import stats
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  LOAD DATA
-# ═════════════════════════════════════════════════════════════════════════════
-
 df = pd.read_csv("lalonde_cps1.csv")
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  DEFINE VARIABLES
-# ═════════════════════════════════════════════════════════════════════════════
 
 treatment  = "treat"
 outcome    = "re78"
@@ -23,19 +15,11 @@ covariates = [c for c in df.columns if c not in [treatment, outcome]]
 ordered_cols = covariates + [treatment, outcome]
 df = df[ordered_cols]
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  BASIC CLEANING
-# ═════════════════════════════════════════════════════════════════════════════
-
 df = df.dropna().reset_index(drop=True)
 
 for col in ["re74", "re75", "re78"]:
     if col in df.columns:
         df[col] = np.log1p(df[col])
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  PREPARE MATRIX
-# ═════════════════════════════════════════════════════════════════════════════
 
 X_raw = df.values.astype(float)
 n_cov = len(covariates)
@@ -46,10 +30,6 @@ X_raw[:, :n_cov] = scaler.fit_transform(X_raw[:, :n_cov])
 var_names   = ordered_cols
 treat_idx   = ordered_cols.index(treatment)
 outcome_idx = ordered_cols.index(outcome)
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  RUN CSC-PC PIPELINE
-# ═════════════════════════════════════════════════════════════════════════════
 
 result = CSC_PC_PIPELINE(
     X_raw,
@@ -76,17 +56,9 @@ edges            = result["edges"]
 K_star           = result["K_star"]
 k_star           = result["k_star"]
 diag             = result["diagnostics"]
-contracted_pairs = result["contracted_pairs"]   # NEW: from fixed pipeline
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  ATTACH CLUSTERS BACK TO DATAFRAME
-# ═════════════════════════════════════════════════════════════════════════════
+contracted_pairs = result["contracted_pairs"] 
 
 df["cluster"] = clusters
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  OUTPUT SUMMARY
-# ═════════════════════════════════════════════════════════════════════════════
 
 print("\n" + "=" * 52)
 print("  CSC-PC RESULTS  –  LaLonde CPS1")
@@ -128,10 +100,6 @@ for (i, j), direction in edges.items():
     elif u < len(var_names) and v < len(var_names):
         print(f"  {var_names[u]}  →  {var_names[v]}")
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STANDALONE t-SNE CLUSTER PLOT
-#  (always 2-D regardless of K*;  complements the pipeline's built-in plot)
-# ═════════════════════════════════════════════════════════════════════════════
 
 print("\n[Plot] Generating standalone t-SNE cluster map …")
 X_scaled = StandardScaler().fit_transform(X_raw)
@@ -149,9 +117,6 @@ ax.set_ylabel("t-SNE dim 2")
 plt.tight_layout()
 plt.show()
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  GLOBAL ATE
-# ═════════════════════════════════════════════════════════════════════════════
 
 treated_all = df[df[treatment] == 1][outcome]
 control_all = df[df[treatment] == 0][outcome]
@@ -163,10 +128,6 @@ print(f"  Treated N         : {len(treated_all)}")
 print(f"  Control N         : {len(control_all)}")
 print(f"  ATE (log re78)    : {global_ate:+.4f}")
 print(f"  Welch t / p-value : {t_stat:.3f} / {t_pval:.4f}")
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  CLUSTER-WISE ATE
-# ═════════════════════════════════════════════════════════════════════════════
 
 print("\n── Cluster-wise ATE ────────────────────────────────")
 
@@ -228,18 +189,11 @@ for c in sorted(df["cluster"].unique()):
         if sig:
             print(f"    Significance      : {sig}")
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  CLUSTER PROFILE TABLE
-# ═════════════════════════════════════════════════════════════════════════════
-
 print("\n── Cluster covariate profiles ──────────────────────")
 profile_cols = covariates + [treatment, outcome]
 profile = (df.groupby("cluster")[profile_cols].mean().round(3))
 print(profile.to_string())
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ATE COMPARISON PLOT
-# ═════════════════════════════════════════════════════════════════════════════
 
 valid = [r for r in cluster_results if not r["note"]]
 if valid:
@@ -263,9 +217,6 @@ if valid:
     plt.tight_layout()
     plt.show()
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  SILHOUETTE / GAP TABLE
-# ═════════════════════════════════════════════════════════════════════════════
 
 print("\n── Silhouette scores by k ──────────────────────────")
 for k, sc in sorted(diag["sil_scores"].items()):

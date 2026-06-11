@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import warnings
 import itertools
 from copy import deepcopy
@@ -29,17 +27,13 @@ from pygam import LinearGAM, s
 from lingam import DirectLiNGAM
 from causallearn.search.ConstraintBased.PC import pc
 from causallearn.utils.cit import fisherz
-from scipy.optimize import linear_sum_assignment  # Added for robust cluster matching
+from scipy.optimize import linear_sum_assignment 
 
 warnings.filterwarnings("ignore")
 
 MASTER_SEED = 42
 np.random.seed(MASTER_SEED)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  DATA GENERATING PROCESS
-# ══════════════════════════════════════════════════════════════════════════════
 
 def generate_random_dag(q: int, edge_prob: float, rng: np.random.Generator) -> np.ndarray:
     """Generate a random DAG adjacency matrix (q×q)."""
@@ -176,10 +170,6 @@ def generate_data_s3(
     labels_all = np.concatenate(labels_list)
     return X_all, labels_all, np.array(true_aces)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  CASPECT PIPELINE COMPONENTS
-# ══════════════════════════════════════════════════════════════════════════════
 
 def run_pc_algo(data: np.ndarray, alpha: float = 0.05) -> np.ndarray:
     """Run PC algorithm, return binary directed adjacency."""
@@ -496,11 +486,6 @@ def cluster_embedding(
     labels_final = KMeans(n_clusters=best_k, n_init=50, random_state=seed).fit_predict(X_emb)
     return labels_final, best_k, best_sil
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  SHD & ACCURACY EVALUATION
-# ══════════════════════════════════════════════════════════════════════════════
-
 def compute_shd(B_true: np.ndarray, resolved: dict, d: int) -> int:
     true_adj = (B_true != 0).astype(int)
     true_dir = true_adj.T.copy()
@@ -546,11 +531,6 @@ def ovs_orientation_accuracy(
             correct += 1
     return correct / total if total > 0 else 0.0
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  CLUSTER-LEVEL ACE ESTIMATION WITH HUNGARIAN MATCHING
-# ══════════════════════════════════════════════════════════════════════════════
-
 def cluster_ace(
     data_orig: np.ndarray,
     labels: np.ndarray,
@@ -575,10 +555,6 @@ def cluster_ace(
             aces[c] = np.nan
     return aces
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  FULL PIPELINE
-# ══════════════════════════════════════════════════════════════════════════════
 
 def run_pipeline(
     data: np.ndarray,
@@ -688,10 +664,6 @@ def evaluate_replication(
     }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MONTE CARLO RUNNER
-# ══════════════════════════════════════════════════════════════════════════════
-
 def run_mc(
     setting: str,
     n: int,
@@ -783,18 +755,16 @@ def print_table(title: str, rows: list[dict], cols: list[str], headers: list[str
 
 
 def main():
-    # ── 1. Scale graph back to its native operational size ──────────────────
     Q          = 8
     TREAT_IDX  = 6
     OUT_IDX    = 7
     INTERCEPTS = np.array([-3.0, 0.0, 3.0])
 
-    # ── 2. Scale up simulation precision for your paper's results ───────────
-    M_REPS     = 100  # Run 100 Monte Carlo replications to stabilize means
+    M_REPS     = 100  
 
     DEFAULT_KW = dict(
         alpha_ci=0.05,
-        B=100,        # CRITICAL: Increase bootstrap runs to 100 for stable OVS
+        B=100,     
         theta=0.50,
         tau=0.15,
         w_L_max=0.20,
@@ -803,9 +773,6 @@ def main():
         symmetrise=False,
     )
 
-    # Let the loops run for n in [500, 1000, 2000]...
-
-    # ── Setting S1: Clean Linear DAG, Non-Gaussian Errors ─────────────────────
     print("\n>>> Running Setting S1 (Clean Linear, Non-Gaussian) ...")
     s1_rows = []
     for n in [500, 1000, 2000]:
@@ -822,7 +789,6 @@ def main():
         ["n", "ARI", "SHD", "OVS_Acc", "RMSE_C1", "RMSE_C2", "RMSE_C3"],
     )
 
-    # ── Setting S2: Mixed Linearity (Nonlinear Edges Routed to DML) ───────────
     print("\n>>> Running Setting S2 (Mixed Linearity) ...")
     s2_rows = []
     for n in [500, 1000, 2000]:
@@ -839,7 +805,6 @@ def main():
         ["n", "ARI", "SHD", "OVS_Acc", "RMSE_C1", "RMSE_C2", "RMSE_C3"],
     )
 
-    # ── Setting S3: Mild Causal Sufficiency Violation (Latent Confounder) ─────
     print("\n>>> Running Setting S3 (Latent Confounder) ...")
     s3_rows = []
     for n in [500, 1000, 2000]:
@@ -858,7 +823,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # ── 1. Define required graph constants ────────────────────────────────────
     Q = 8
     TREAT_IDX = 6
     OUT_IDX = 7
@@ -873,11 +837,6 @@ if __name__ == "__main__":
 
     ablation_results = {}
 
-    # ── 2. Map the ablations to the new pipeline_kwargs format ────────────────
-    # Full: w_L_max=0.20, use_stability=True, symmetrise=False
-    # A1 (PC Only): w_L_max=0.0 (This turns off LiNGAM), use_stability=True
-    # A2 (No Stability): use_stability=False
-    # A3 (Symmetrisation): symmetrise=True
     configs = {
         "Full CaSPECT":        dict(w_L_max=0.20, use_stability=True,  symmetrise=False),
         "A1: PC-only orient":  dict(w_L_max=0.0,  use_stability=True,  symmetrise=False),
@@ -885,15 +844,12 @@ if __name__ == "__main__":
         "A3: Symmetrisation":  dict(w_L_max=0.20, use_stability=True,  symmetrise=True),
     }
 
-    # ── 3. Run the MC loop ────────────────────────────────────────────────────
     for label, cfg in configs.items():
         print(f"\nRunning {label}...")
 
-        # Merge default pipeline kwargs with the specific ablation settings
         pipeline_kwargs = dict(alpha_ci=0.05, B=100, theta=0.50, tau=0.15, alpha_pr=0.15)
         pipeline_kwargs.update(cfg)
 
-        # Call the updated run_mc (takes n as an int, returns a dict)
         res = run_mc(
             setting="S1",
             n=n_samples,
@@ -908,11 +864,9 @@ if __name__ == "__main__":
 
         ablation_results[label] = res
 
-        # Real-time feedback
         mean_rmse = np.nanmean([res["rmse_c1"], res["rmse_c2"], res["rmse_c3"]])
         print(f"  -> ARI: {res['ari_mean']:.3f} | SHD: {res['shd_mean']:.1f} | RMSE: {mean_rmse:.3f}")
 
-    # ── 4. Print the final results table ──────────────────────────────────────
     print(f"\n{'─'*75}")
     print("  Table 4: Ablation Analysis (S1, n=1000)")
     print(f"{'─'*75}")
@@ -922,7 +876,6 @@ if __name__ == "__main__":
 
     for label, r in ablation_results.items():
         mean_rmse = np.nanmean([r["rmse_c1"], r["rmse_c2"], r["rmse_c3"]])
-        # Format "Mean (StdDev)"
         ari_str = f"{r['ari_mean']:.3f} ({r['ari_std']:.3f})"
         shd_str = f"{r['shd_mean']:.1f} ({r['shd_std']:.1f})"
         ovs_str = f"{r['ova_mean']:.3f} ({r['ova_std']:.3f})"

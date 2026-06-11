@@ -111,12 +111,8 @@ under standard causal assumptions.
 
 ├── src/
 │   ├── caspect.py
-│   ├── dag_builder.py
-│   ├── ovs.py
-│   ├── edge_weight_estimator.py
-│   ├── directed_laplacian.py
+│   ├── lalonde.py
 │   ├── spectral_embedding.py
-│   ├── clustering.py
 │   ├── simulations.py
 │   └── utils.py
 
@@ -124,10 +120,6 @@ under standard causal assumptions.
 │   ├── lalonde/
 │   ├── ihdp/
 │   └── 401k/
-
-├── results/
-│   ├── figures/
-│   └── tables/
 ```
 
 ---

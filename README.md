@@ -113,7 +113,7 @@ under standard causal assumptions.
 │   ├── caspect.py
 │   ├── lalonde.py
 │   ├── spectral_embedding.py
-│   ├── simulations.py
+│   ├── simulation.py
 │   └── utils.py
 
 ├── datasets/

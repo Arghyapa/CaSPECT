@@ -24,11 +24,6 @@ from causallearn.utils.cit import fisherz
 
 warnings.filterwarnings("ignore")
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  VISUALISATION
-# ═════════════════════════════════════════════════════════════════════════════
-
 def plot_spectral_gap(L):
     """Plot eigenvalue spectrum and spectral gaps of the Chung Laplacian."""
     eigvals = np.linalg.eigvalsh(L)
@@ -79,8 +74,6 @@ def plot_silhouette(X_embed):
     plt.tight_layout()
     plt.show()
 
-
-# ── FIX-3: plot_clusters always does t-SNE on X_orig ─────────────────────────
 def plot_clusters(X_embed, clusters, X_orig=None, perplexity=30, random_state=42):
     """
     Scatter-plot cluster assignments.
@@ -160,20 +153,17 @@ def plot_dag(A, var_names=None, contracted_pairs=None):
         for j in range(q):
             if A[i, j] > 0:
                 G.add_edge(i, j, weight=round(A[i, j], 3))
-                # Mark edges incident to contracted nodes
                 if i in contracted_nodes or j in contracted_nodes:
                     contracted_edges.add((i, j))
 
     pos = nx.spring_layout(G, seed=42)
 
-    # Split edges for different styles
     normal_edges     = [(u, v) for u, v in G.edges() if (u, v) not in contracted_edges]
     contracted_edges = [(u, v) for u, v in G.edges() if (u, v) in contracted_edges]
 
     edge_labels = {(u, v): f"{d['weight']:.2f}"
                    for u, v, d in G.edges(data=True)}
 
-    # Node colours: highlight contracted surviving nodes
     node_colors = ['tomato' if i in contracted_nodes else 'steelblue'
                    for i in range(q)]
 
@@ -192,7 +182,6 @@ def plot_dag(A, var_names=None, contracted_pairs=None):
 
     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7)
 
-    # Legend
     legend_handles = [
         mpatches.Patch(color='steelblue', label='Normal node'),
         mpatches.Patch(color='tomato', label='Contracted node (merged)'),
@@ -207,10 +196,6 @@ def plot_dag(A, var_names=None, contracted_pairs=None):
     plt.show()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 1a  –  PC ALGORITHM
-# ═════════════════════════════════════════════════════════════════════════════
-
 def run_pc(data, alpha=0.05):
     """Run PC Algorithm and return a binary directed adjacency matrix."""
     result = pc(data, indep_test=fisherz, alpha=alpha,
@@ -223,32 +208,15 @@ def run_pc(data, alpha=0.05):
     for i in range(d):
         for j in range(d):
             if G[i, j] == -1 and G[j, i] == -1:
-                adj[i, j] = adj[j, i] = 1          # undirected
+                adj[i, j] = adj[j, i] = 1          
             elif G[i, j] == 1 and G[j, i] == -1:
-                adj[i, j] = 1                       # i → j
+                adj[i, j] = 1                       
             elif G[i, j] == -1 and G[j, i] == 1:
-                adj[j, i] = 1                       # j → i
+                adj[j, i] = 1                       
     return adj
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 1b  –  BOOTSTRAP STABILITY  (FIX-4)
-# ═════════════════════════════════════════════════════════════════════════════
-
 def bootstrap_pc(data, B=100, alpha=0.05, theta=0.50, seed=42):
-    """
-    Bootstrap the PC Algorithm B times.
-
-    FIX-4: undirected edges now correctly increment f_count for BOTH
-    endpoints so that the inclusion frequency is symmetric and edges that are
-    consistently undirected still pass the stability threshold.
-
-    Returns
-    -------
-    f_uv : (d, d) – skeleton inclusion frequency  (symmetric)
-    g_uv : (d, d) – directed orientation frequency  (g[i,j] = P(i→j))
-    rho  : (d, d) – orientation confidence  rho[i,j] = g[i,j] / f[i,j]
-    """
     rng = np.random.default_rng(seed)
     n, d = data.shape
     f_count = np.zeros((d, d))
@@ -262,15 +230,14 @@ def bootstrap_pc(data, B=100, alpha=0.05, theta=0.50, seed=42):
             continue
 
         for i in range(d):
-            for j in range(i + 1, d):          # iterate upper triangle only
+            for j in range(i + 1, d):          
                 if G[i, j] != 0 or G[j, i] != 0:
-                    # Edge present in skeleton: increment both directions
                     f_count[i, j] += 1
-                    f_count[j, i] += 1          # FIX-4: symmetric count
+                    f_count[j, i] += 1          
                 if G[i, j] == 1 and G[j, i] == 0:
-                    g_count[i, j] += 1          # i → j
+                    g_count[i, j] += 1          
                 elif G[j, i] == 1 and G[i, j] == 0:
-                    g_count[j, i] += 1          # j → i
+                    g_count[j, i] += 1         
 
     f_uv = f_count / B
     g_uv = g_count / B
@@ -281,12 +248,7 @@ def bootstrap_pc(data, B=100, alpha=0.05, theta=0.50, seed=42):
     return f_uv, g_uv, rho
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 1c  –  LiNGAM + OVS
-# ═════════════════════════════════════════════════════════════════════════════
-
 def _jarque_bera_fraction(data, alpha=0.10):
-    """Fraction of variables whose OLS residuals reject Gaussianity (JB test)."""
     n, d = data.shape
     count = 0
     for j in range(d):
@@ -338,10 +300,6 @@ def compute_ovs(f_uv, g_uv, rho, B_hat, w_L=0.20, tau=0.15, theta=0.50):
     return orientations, ovs_matrix
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 1d  –  DAG RESOLUTION + ACYCLICITY
-# ═════════════════════════════════════════════════════════════════════════════
-
 def _has_cycle(G_nx: nx.DiGraph) -> bool:
     return not nx.is_directed_acyclic_graph(G_nx)
 
@@ -367,20 +325,12 @@ def _apply_meek_r2(G_nx: nx.DiGraph) -> nx.DiGraph:
 
 def resolve_with_acyclicity(orientations, d, ovs_matrix=None,
                              domain_order=None):
-    """
-    Resolve ambiguous edges via four-step hierarchy.
-
-    Returns
-    -------
-    resolved         : dict  {(i,j): (u,v)}
-    G_nx             : nx.DiGraph of the final DAG
-    contracted_pairs : list of (i, j) pairs that were contracted
-    """
+   
     G_nx = nx.DiGraph()
     G_nx.add_nodes_from(range(d))
     resolved = {}
     ambiguous = []
-    contracted_pairs = []          # FIX-1: track which pairs were contracted
+    contracted_pairs = []          
 
     # ── Step 1 ────────────────────────────────────────────────────────────────
     for edge, direction in orientations.items():
@@ -441,17 +391,12 @@ def resolve_with_acyclicity(orientations, d, ovs_matrix=None,
                 G_nx.add_edge(u_keep, succ)
         G_nx.remove_node(u_drop)
         resolved[(i, j)] = (u_keep, -1)
-        contracted_pairs.append((i, j))        # FIX-1: record contraction
+        contracted_pairs.append((i, j))       
 
     return resolved, G_nx, contracted_pairs
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 2  –  CAUSAL EDGE WEIGHT ESTIMATION
-# ═════════════════════════════════════════════════════════════════════════════
-
 def _reset_test(y, X_reg, alpha=0.05):
-    """RESET test for functional form. True = linear (use OLS)."""
     Xc = sm.add_constant(X_reg)
     try:
         res0 = sm.OLS(y, Xc).fit()
@@ -470,7 +415,6 @@ def _reset_test(y, X_reg, alpha=0.05):
 
 
 def _ols_ate(y, t, Z):
-    """OLS: coefficient on t after adjusting for Z."""
     if Z.shape[1] > 0:
         X_reg = sm.add_constant(np.column_stack([t, Z]))
         coef_idx = 1
@@ -485,7 +429,6 @@ def _ols_ate(y, t, Z):
 
 
 def _dml_ate(y, t, Z, K=5, seed=42):
-    """DML with K-fold cross-fitting."""
     n = len(y)
     V_res = np.zeros(n)
     U_res = np.zeros(n)
@@ -519,7 +462,6 @@ def _dml_ate(y, t, Z, K=5, seed=42):
 
 
 def _backdoor_set(G_nx: nx.DiGraph, u: int, v: int) -> list[int]:
-    """Parents of u that are not descendants of u."""
     if not G_nx.has_node(u) or not G_nx.has_node(v):
         return []
     try:
@@ -536,7 +478,6 @@ def _backdoor_set(G_nx: nx.DiGraph, u: int, v: int) -> list[int]:
 
 def estimate_weights(data, resolved_edges, G_nx, f_uv,
                      alpha_reset=0.05, dml_k=5):
-    """Estimate bootstrap-stability-weighted |ATE| for every directed edge."""
     d = data.shape[1]
     A = np.zeros((d, d))
 
@@ -568,10 +509,6 @@ def estimate_weights(data, resolved_edges, G_nx, f_uv,
     return A
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 3  –  CHUNG LAPLACIAN
-# ═════════════════════════════════════════════════════════════════════════════
-
 def compute_stationary_distribution(P):
     """Solve π = πP via left eigenvector for eigenvalue 1."""
     eigvals, eigvecs = eig(P.T)
@@ -601,23 +538,7 @@ def compute_laplacian(A, alpha=0.15):
     return L, P, pi
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 3b  –  SPECTRAL GAP  →  K*  (FIX-2 + FIX-5)
-# ═════════════════════════════════════════════════════════════════════════════
-
 def spectral_gap(L):
-    """
-    Eigendecompose L and select K* as the index of the largest spectral gap.
-
-    FIX-2: The gap between eigenvalues 0 and 1 (index 0 in `gaps`) is the
-    trivial algebraic-connectivity gap and almost always dominates for a
-    nearly-connected graph, forcing K*=1.  We now search for the largest gap
-    among gaps[1:] (i.e. starting from the second gap) so that the embedding
-    dimension reflects genuine causal community structure.
-
-    FIX-5: Guard against the degenerate case where all non-trivial gaps are
-    equal (flat spectrum), which would give argmax=0; we default K*=2 there.
-    """
     eigvals, eigvecs = np.linalg.eigh(L)
     order   = np.argsort(eigvals)
     eigvals = eigvals[order]
@@ -629,23 +550,16 @@ def spectral_gap(L):
         # Degenerate: only 2 eigenvalues
         K_star = 1
     else:
-        # FIX-2: skip trivial gap at index 0
         non_trivial_gaps = gaps[1:]
-        best_idx = int(np.argmax(non_trivial_gaps))   # index into gaps[1:]
-        K_star = best_idx + 2                          # +1 for 0-based, +1 for skip
-        K_star = max(2, K_star)                        # FIX-5: at least 2
-
-    # Clamp to available eigenvectors (skip v_1)
+        best_idx = int(np.argmax(non_trivial_gaps))  
+        K_star = best_idx + 2                          
+        K_star = max(2, K_star)                       
     K_star = min(K_star, L.shape[0] - 2)
     K_star = max(1, K_star)
 
-    V_K = eigvecs[:, 1:K_star + 1]    # skip trivial eigenvector v_1
+    V_K = eigvecs[:, 1:K_star + 1]    
     return V_K, K_star, eigvals
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  STAGE 5  –  CLUSTERING  +  CLUSTER COUNT SELECTION
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _gap_statistic(X_emb, k, B_ref=50, seed=42):
     """Gap statistic for a given k."""
@@ -707,10 +621,6 @@ def embed_and_cluster(data, V_K, K_star, B_ref=50, seed=42):
     return clusters, X_embed, k_star, diagnostics
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  FULL PIPELINE
-# ═════════════════════════════════════════════════════════════════════════════
-
 def CSC_PC_PIPELINE(
     data,
     var_names=None,
@@ -734,23 +644,20 @@ def CSC_PC_PIPELINE(
             print(f"[CSC-PC] {msg}")
 
     data = np.array(data, dtype=float)
-    # Keep a copy of the standardised data BEFORE pipeline re-standardises
-    # (used for t-SNE in plot_clusters — FIX-3)
+
     data_for_tsne = StandardScaler().fit_transform(data)
 
     data = StandardScaler().fit_transform(data)
     n, d = data.shape
 
-    # ── Stage 1a ──────────────────────────────────────────────────────────────
     log("Stage 1a: PC Algorithm …")
     _ = run_pc(data, alpha=alpha_ci)
 
-    # ── Stage 1b ──────────────────────────────────────────────────────────────
+   
     log(f"Stage 1b: Bootstrap stability ({B} resamples) …")
     f_uv, g_uv, rho = bootstrap_pc(data, B=B, alpha=alpha_ci,
                                     theta=theta, seed=seed)
 
-    # ── Stage 1c ──────────────────────────────────────────────────────────────
     log("Stage 1c: LiNGAM diagnostic + OVS …")
     ng_frac = _jarque_bera_fraction(data)
     w_L = min(ng_frac, 1.0) * w_L_max
@@ -764,9 +671,8 @@ def CSC_PC_PIPELINE(
     n_ambiguous = sum(1 for v in orientations.values() if v is None)
     log(f"  Oriented: {n_oriented}, Ambiguous: {n_ambiguous}")
 
-    # ── Stage 1d ──────────────────────────────────────────────────────────────
+   
     log("Stage 1d: Orientation resolution …")
-    # FIX-1: resolve_with_acyclicity now returns contracted_pairs
     resolved_edges, G_nx, contracted_pairs = resolve_with_acyclicity(
         orientations, d, ovs_matrix=ovs_matrix, domain_order=domain_order,
     )
@@ -780,24 +686,20 @@ def CSC_PC_PIPELINE(
             cp_names.append(f"{ni}/{nj}")
         log(f"  Contracted pairs: {cp_names}")
 
-    # ── Stage 2 ───────────────────────────────────────────────────────────────
     log("Stage 2: Estimating causal edge weights …")
     A = estimate_weights(data, resolved_edges, G_nx, f_uv,
                          alpha_reset=alpha_reset, dml_k=dml_k)
     log(f"  A_stable range: [{A.min():.4f}, {A.max():.4f}]")
 
-    # ── Stage 3 ───────────────────────────────────────────────────────────────
     log("Stage 3: Building Chung Laplacian …")
     L, P, pi = compute_laplacian(A, alpha=alpha_pr)
 
-    # ── Stage 3b ──────────────────────────────────────────────────────────────
     log("Stage 3b: Selecting embedding dimension K* …")
-    V_K, K_star, eigvals = spectral_gap(L)   # FIX-2 applied inside
+    V_K, K_star, eigvals = spectral_gap(L)  
     gaps = np.diff(eigvals)
     log(f"  K* = {K_star}  (largest non-trivial gap = "
         f"{gaps[K_star - 1] if K_star - 1 < len(gaps) else float('nan'):.4f})")
 
-    # ── Stages 4–5 ────────────────────────────────────────────────────────────
     log("Stages 4–5: Embedding and clustering …")
     clusters, X_embed, k_star, diagnostics = embed_and_cluster(
         data, V_K, K_star, B_ref=B_ref, seed=seed,
@@ -808,13 +710,10 @@ def CSC_PC_PIPELINE(
         f"agree={diagnostics['criteria_agree']})")
     log("Done.")
 
-    # ── Visualisation ─────────────────────────────────────────────────────────
     if visualise:
         plot_spectral_gap(L)
         plot_silhouette(X_embed)
-        # FIX-3: pass X_orig so t-SNE runs on full feature matrix
         plot_clusters(X_embed, clusters, X_orig=data_for_tsne)
-        # FIX-1: pass contracted_pairs so DAG relabels them
         plot_dag(A, var_names=var_names, contracted_pairs=contracted_pairs)
 
     return {
@@ -829,7 +728,7 @@ def CSC_PC_PIPELINE(
         "k_star"           : k_star,
         "eigenvalues"      : eigvals,
         "diagnostics"      : diagnostics,
-        "contracted_pairs" : contracted_pairs,       # FIX-1: exposed in result
+        "contracted_pairs" : contracted_pairs,      
         "ovs_matrix"       : ovs_matrix,
         "f_uv"             : f_uv,
         "g_uv"             : g_uv,

@@ -106,7 +106,6 @@ under standard causal assumptions.
 ```text
 ├── LICENSE
 ├── README.md
-├── main_pipeline.py
 
 ├── src/
 │   ├── caspect.py

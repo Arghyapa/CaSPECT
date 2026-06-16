@@ -112,9 +112,7 @@ under standard causal assumptions.
 │   ├── caspect.py
 │   ├── lalonde.py
 │   ├── simulations.py
-
-│  
-
+  
 ├── datasets/
 │   ├── lalonde/
 │   ├── ihdp/

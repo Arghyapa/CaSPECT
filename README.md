@@ -111,9 +111,9 @@ under standard causal assumptions.
 ├── src/
 │   ├── caspect.py
 │   ├── lalonde.py
-│   ├── spectral_embedding.py
-│   ├── simulation.py
-│   └── utils.py
+│   ├── simulations.py
+
+│  
 
 ├── datasets/
 │   ├── lalonde/

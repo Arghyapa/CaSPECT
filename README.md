@@ -15,8 +15,6 @@ CaSPECT integrates **causal discovery**, **average treatment effect estimation**
 * [Installation](#️-installation)
 * [Usage](#-usage)
 * [Experimental Results](#-experimental-results)
-* [Citation](#-citation)
-
 ---
 
 # 🔬 Overview
@@ -254,31 +252,4 @@ This allows CaSPECT to:
 * Provide interpretable graph-based explanations for subgroup formation.
 
 ---
-
-# 📜 Citation
-
-If you find this repository useful in your research, please cite:
-
-```bibtex
-@article{pratihar2026caspect,
-  title={CaSPECT: Discovering Causally Homogeneous Subgroups via Directed Spectral Embedding},
-  author={Pratihar, Arghya and Chakraborty, Shinjon and Das, Swagatam},
-  journal={Stat},
-  year={2026}
-}
-```
-
----
-
-## ⭐ Acknowledgements
-
-This work was developed at the **Indian Statistical Institute (ISI), Kolkata**, and explores the intersection of:
-
-* Causal Inference
-* Spectral Graph Theory
-* Directed Laplacians
-* Treatment Effect Heterogeneity
-* Unsupervised Learning
-
-We hope CaSPECT serves as a useful framework for researchers interested in discovering latent causal structure from observational data.
 

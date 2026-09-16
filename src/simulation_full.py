@@ -1,26 +1,3 @@
-"""
-caspect_simulation.py
-=====================
-Simulation study for CaSPECT (CSC-PC pipeline).
-
-Reproduces all results in Section 6 of the paper:
-  - Setting S1: Clean linear DAG, non-Gaussian errors
-  - Setting S2: Mixed linearity (three nonlinear edges, RESET routing)
-  - Setting S3: Mild causal sufficiency violation (latent confounder)
-  - Ablations A1–A3 (within S1 at n=1000)
-
-Dependencies
-------------
-  numpy, scipy, pandas, scikit-learn, statsmodels, networkx,
-  causal-learn, lingam, pygam, matplotlib, tabulate
-
-Run
----
-  python caspect_simulation.py
-
-Results are printed as LaTeX-style tables and saved to
-  simulation_results.csv
-"""
 import itertools
 import warnings
 import time
@@ -45,7 +22,6 @@ from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 from statsmodels.stats.stattools import jarque_bera as jb_test
 
-warnings.filterwarnings("ignore")
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  OPTIONAL IMPORTS  (graceful fallback if not installed)
@@ -81,12 +57,6 @@ except ImportError:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def sample_dag(q: int, p_edge: float = 0.35, seed: int = 0) -> np.ndarray:
-    """
-    Random DAG adjacency matrix.
-    Draw a uniformly random topological ordering; include each upper-triangle
-    edge with probability p_edge.  Returns binary adjacency A where A[u,v]=1
-    means u → v.
-    """
     rng  = np.random.default_rng(seed)
     perm = rng.permutation(q)          # random topological ordering
     A    = np.zeros((q, q), dtype=int)
@@ -115,7 +85,6 @@ def sample_coefficients(A: np.ndarray, seed: int = 0) -> np.ndarray:
 
 
 def topological_order(A: np.ndarray) -> list[int]:
-    """Kahn's algorithm for topological sort of DAG adjacency matrix."""
     G   = nx.DiGraph(A)
     return list(nx.topological_sort(G))
 
@@ -133,20 +102,11 @@ def generate_data(
     alpha_clusters: tuple = (-1.0, 0.0, 1.0),
     seed:       int  = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Generate data from the SEM described in Section 6.1.1.
-
-    Returns
-    -------
-    X        : (n, q) data matrix
-    clusters : (n,)  ground-truth cluster labels in {0,1,2}
-    true_ace  : (3,)  true cluster-level ACE  τ_c^0
-    """
+ 
     rng  = np.random.default_rng(seed)
     q    = A.shape[0]
     order = topological_order(A)
 
-    # ── Cluster assignment via treatment intercept shift ───────────────────────
     # Assign each unit to a cluster first; intercept is applied during SEM.
     base_cluster = np.repeat([0, 1, 2], [n // 3, n // 3, n - 2 * (n // 3)])
     rng.shuffle(base_cluster)
@@ -193,11 +153,6 @@ def generate_data(
 
         X[:, v] = Xv
 
-    # ── True cluster-level ACE ─────────────────────────────────────────────────
-    # τ_c^0 = β_{Z→Y} + sum of indirect path products
-    # For linear SEM: this is the total causal effect of Z on Y.
-    # We estimate it analytically as the (treat→outcome) entry of
-    # the path-coefficient matrix (I - B)^{-1}.
     try:
         I_minus_B    = np.eye(q) - B
         total_effects = np.linalg.inv(I_minus_B)
@@ -1073,12 +1028,8 @@ def plot_results(all_df: pd.DataFrame):
 # ═════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-
-    # ── Configuration ─────────────────────────────────────────────────────────
-    # Set M_FULL=200 and M_ABLATION=200 for full paper results.
-    # Reduced defaults here for a quick smoke-test run.
-    M_FULL     = 50     # replications for S1/S2/S3  (paper: 200)
-    M_ABLATION = 50     # replications for ablations (paper: 200)
+    M_FULL     = 50    
+    M_ABLATION = 50     
     VERBOSE    = True
 
     print("=" * 70)
@@ -1129,12 +1080,10 @@ if __name__ == "__main__":
 
     print_ablation_table(ablation_results)
 
-    # ── Combine and save ──────────────────────────────────────────────────────
     all_df = pd.concat(all_results, ignore_index=True)
     all_df.to_csv("simulation_results.csv", index=False)
     print("\n  Results saved → simulation_results.csv")
 
-    # ── Plots ─────────────────────────────────────────────────────────────────
     plot_results(all_df)
 
     print("\n" + "=" * 70)

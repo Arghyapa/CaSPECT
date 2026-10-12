@@ -1,4 +1,4 @@
-# CaSPECT: Discovering Causally Homogeneous Subgroups via Directed Spectral Embedding
+# CaSPECT: Discovering Causally Homogeneous Subgroups via Directed Spectral Clustering
 
 This repository contains the official Python implementation of **CaSPECT (Causal Spectral Clustering)**, a novel framework for discovering **causally homogeneous subgroups** from observational data.
 

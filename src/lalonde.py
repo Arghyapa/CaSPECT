@@ -1,18 +1,5 @@
 """
 CaSPECT on the LaLonde CPS1 data (Section 9.1).
-
-185 NSW treated participants and 15,992 CPS controls.  Earnings re74, re75 and
-re78 enter on the log1p scale, y -> log(1 + y).  The script prints the
-spectral choices (Figure 2), the edges of the estimated DAG (Table 8), the
-cluster profiles (Table 9) and the naive global and cluster-wise ACE
-(Table 10), and saves Figures 1-3.
-
-The partition is computed from a representation that includes the treat and
-re78 columns, so the clusters are descriptive subgroups and the within-cluster
-estimates are conditional on that data-dependent partition (Section 9).
-
-    python lalonde.py                    # Table 2 settings
-    python lalonde.py --B 20 --no-plots  # quick look
 """
 
 import os

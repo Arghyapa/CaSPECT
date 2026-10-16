@@ -19,7 +19,7 @@ CaSPECT is a spectral clustering framework in which the representation of the un
 * [Experiments](#-experiments)
 ---
 
-# 🔬 Overview
+# Overview
 
 Given observational data on covariates, a treatment $Z$ and an outcome $Y$, CaSPECT builds a low-dimensional representation of the units whose directions are chosen by the estimated causal mechanism. Principal components choose directions by marginal variance, and kernel spectral clustering by isotropic similarity. CaSPECT then partitions the units in that representation.
 
@@ -32,7 +32,7 @@ CaSPECT should be useful when the treatment-relevant structure among the units i
 
 ---
 
-# 🎯 What CaSPECT estimates
+# What CaSPECT estimates
 
 * **Population target (Definition 1).** The population CaSPECT embedding is the linear map $\mathbf s \mapsto \boldsymbol\Phi_{K_0}^{\top}\mathbf s$, where $\mathbf s$ is the vector of standardized variables and $\boldsymbol\Phi_{K_0}$ holds the $K_0$ leading non-trivial eigenvectors of the population Chung Laplacian $L_0$. The population partition is the $k$-means partition of the law of $\boldsymbol\Phi_{K_0}^{\top}\mathbf s$.
 * **Causally homogeneous subgroups (Definition 2).** A partition is $\varepsilon$-causally homogeneous if $\sum_j \frac{|C_j|}{n}\widehat{\mathrm{Var}}_{C_j}(\tau(x_i)) \le \varepsilon$.

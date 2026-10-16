@@ -41,7 +41,7 @@ CaSPECT should be useful when the treatment-relevant structure among the units i
 
 ---
 
-# 🧩 Method
+# Method
 
 ### Step 1: DAG formation
 
@@ -104,7 +104,7 @@ The pipeline prints whether the configured $w_L$ satisfies the conditions of Pro
 
 ---
 
-# 🎛 Hyperparameters
+# Hyperparameters
 
 The defaults are the configuration used throughout the paper (Table 2):
 
@@ -127,7 +127,7 @@ The defaults are the configuration used throughout the paper (Table 2):
 
 ---
 
-# 📂 Repository Structure
+# Repository Structure
 
 ```text
 ├── LICENSE
@@ -151,7 +151,7 @@ The defaults are the configuration used throughout the paper (Table 2):
 
 ---
 
-# ⚙️ Installation
+# Installation
 
 ```bash
 git clone https://github.com/Arghyapa/CaSPECT.git
@@ -163,7 +163,7 @@ pip install -r requirements.txt
 
 ---
 
-# 🚀 Usage
+# Usage
 
 ### Python API
 
@@ -211,7 +211,7 @@ Outputs, including per-replication CSVs, summaries and `simulation_results.png`,
 
 ---
 
-# 📊 Experiments
+# Experiments
 
 ## Simulation study (Section 7)
 
@@ -260,11 +260,3 @@ The treatment is `e401` and the outcome is `net_tfa` (signed-log in the pipeline
 > Numbers quoted in this section are those reported in the paper. Rerunning the scripts in this release may give different values (see `CHANGELOG.md`).
 
 ---
-
-# ⚠️ Limitations
-
-* The partition is computed from a representation that includes the treatment and outcome. Clusters are descriptive, not causal subgroups in the sense of Definition 2. A variant that projects only the pre-treatment covariate block has not been evaluated.
-* Heterogeneity in $\tau$ along directions annihilated by $\boldsymbol\Phi_{K_0}^{\top}$ is invisible to CaSPECT.
-* The analysis relies on causal sufficiency (Assumption 2). Robustness to latent confounding is studied only empirically.
-* Theorem 2 is a consistency result for the graph, the weights, the Laplacian and the eigenspace. It does not cover the $k$-means partition or post-selection inference for the edge weights.
-* Contraction can remove the treatment–outcome pathway (as in the 401(k) run). A sensitivity analysis over $\gamma$ or the domain ordering is then needed.

@@ -1,735 +1,1135 @@
+"""
+CaSPECT -- Causal Spectral Clustering
+=====================================
+
+Reference implementation of
+
+    A. Pratihar, S. Chakraborty, S. Das.
+    "CaSPECT: Discovering Causally Homogeneous Subgroups via Directed
+    Spectral Clustering."
+
+Section, equation, step and table numbers in the comments refer to that paper.
+
+Pipeline (Algorithm 1)
+----------------------
+Step 1  DAG formation    PC on the full sample and on B bootstrap resamples,
+                         stable skeleton S = {f_uv >= theta}, Orientation
+                         Validation Score (Eq. 2), resolution hierarchy
+                         (acyclicity filter, Meek rules R1-R4, domain ordering,
+                         edge contraction), NOTEARS acyclicity check with
+                         cycle breaking by contraction.
+Step 2  Edge weights     |ACE| of every directed edge, OLS when the RESET test
+                         does not reject linearity and cross-fitted DML (Eq. 3)
+                         otherwise; A_stab = f_uv * A_uv; merged nodes take the
+                         average of their members' entries.
+Step 3  Laplacian        PageRank transition matrix (Eq. 4), Chung's directed
+                         Laplacian (Eq. 5), K_hat = index of the largest
+                         non-trivial spectral gap.
+Step 4  Clustering       X_tilde = X_std Phi_K (Eq. 7); k-means for
+                         k in {2, ..., k_max}; k* by the Silhouette score, with
+                         the Gap statistic reported alongside.
+
+Conventions
+-----------
+* Variables are indexed 0..q-1.  A directed edge u -> v is stored as (u, v).
+* PC adjacency matrices: adj[u, v] = 1 and adj[v, u] = 0 means u -> v;
+  adj[u, v] = adj[v, u] = 1 means the edge is undirected.
+* B_L[u, v] is the DirectLiNGAM coefficient of u in the structural equation
+  of v (i.e. the transpose of lingam's ``adjacency_matrix_``).
+"""
+
+from __future__ import annotations
+
+import itertools
 import warnings
+from dataclasses import dataclass
+from typing import Optional, Sequence
+
 import numpy as np
 import networkx as nx
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-
-from scipy.linalg import eig
+from scipy import stats
+from scipy.linalg import eig, expm
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
-
 import statsmodels.api as sm
-from statsmodels.stats.stattools import jarque_bera as jb_test
+from statsmodels.stats.stattools import jarque_bera
 
-from pygam import LinearGAM, s
+# ─────────────────────────────────────────────────────────────────────────────
+#  Optional dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+try:
+    from pygam import LinearGAM, s as gam_s
+    HAS_GAM = True
+except ImportError:  # pragma: no cover
+    HAS_GAM = False
 
-from lingam import DirectLiNGAM
-from causallearn.search.ConstraintBased.PC import pc
-from causallearn.utils.cit import fisherz
+try:
+    from lingam import DirectLiNGAM
+    HAS_LINGAM = True
+except ImportError:  # pragma: no cover
+    HAS_LINGAM = False
 
-warnings.filterwarnings("ignore")
-
-def plot_spectral_gap(L):
-    """Plot eigenvalue spectrum and spectral gaps of the Chung Laplacian."""
-    eigvals = np.linalg.eigvalsh(L)
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-    axes[0].plot(eigvals, marker='o', linewidth=1.5)
-    axes[0].set_title("Eigenvalue Spectrum")
-    axes[0].set_xlabel("Index")
-    axes[0].set_ylabel("Eigenvalue")
-    axes[0].grid(True)
-
-    gaps = np.diff(eigvals)
-    axes[1].plot(gaps, marker='o', color='tomato', linewidth=1.5)
-    # Skip trivial gap at index 0 (FIX-2 companion visualisation)
-    k_star_vis = int(np.argmax(gaps[1:]) + 1) if len(gaps) > 1 else 0
-    axes[1].axvline(k_star_vis, color='navy', linestyle='--',
-                    label=f"K* = {k_star_vis + 1}  (non-trivial)")
-    axes[1].set_title("Spectral Gaps  (gap[0] is trivial – often largest)")
-    axes[1].set_xlabel("Index")
-    axes[1].set_ylabel("Gap")
-    axes[1].legend()
-    axes[1].grid(True)
-
-    plt.tight_layout()
-    plt.show()
+try:
+    from causallearn.search.ConstraintBased.PC import pc as _cl_pc
+    from causallearn.utils.cit import fisherz as _cl_fisherz
+    HAS_CAUSALLEARN = True
+except ImportError:  # pragma: no cover
+    HAS_CAUSALLEARN = False
 
 
-def plot_silhouette(X_embed):
-    """Plot silhouette score against cluster count."""
-    if X_embed.shape[1] < 2:
-        print("[CSC-PC] Silhouette plot skipped: embedding is 1-D.")
-        return
+# Hyperparameters used throughout the paper (Table 2).
+DEFAULTS = dict(
+    alpha_ci=0.05,     # alpha_n      PC conditional-independence level
+    B=100,             # B            bootstrap resamples for PC
+    theta=0.55,        # theta        skeleton stability threshold
+    gamma=0.15,        # gamma        edge orientation threshold
+    w_max=0.20,        # w_max        cap on the LiNGAM weight
+    alpha_jb=0.10,     # alpha_JB     Jarque-Bera level
+    alpha_reset=0.05,  # alpha_RESET  RESET test level
+    alpha_pr=0.15,     # alpha_PR     PageRank teleportation
+    n_fold=5,          # n_fold       DML cross-fitting folds
+    k_max=9,           # k_max        largest k searched
+)
 
-    scores = []
-    Ks = range(2, min(10, X_embed.shape[0]))
-    for k in Ks:
-        labels = KMeans(n_clusters=k, n_init=20,
-                        random_state=42).fit_predict(X_embed)
-        scores.append(silhouette_score(X_embed, labels))
 
-    plt.figure(figsize=(6, 4))
-    plt.plot(list(Ks), scores, marker='o', linewidth=1.5)
-    plt.title("Silhouette Score vs. K")
-    plt.xlabel("Number of clusters K")
-    plt.ylabel("Silhouette score")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+# ═════════════════════════════════════════════════════════════════════════════
+#  STEP 1a/1b ─ PC ALGORITHM AND BOOTSTRAP STABILITY
+# ═════════════════════════════════════════════════════════════════════════════
 
-def plot_clusters(X_embed, clusters, X_orig=None, perplexity=30, random_state=42):
+def _pc_causallearn(data: np.ndarray, alpha: float) -> np.ndarray:
+    """PC via causal-learn, decoded into the adjacency convention above.
+
+    causal-learn encodes i -> j as G[i, j] = -1 and G[j, i] = 1, and i -- j as
+    G[i, j] = G[j, i] = -1.  A bidirected mark (both +1, conflicting
+    v-structures) is treated as undirected.
     """
-    Scatter-plot cluster assignments.
-
-    If X_orig is supplied (recommended), t-SNE is always run on X_orig so
-    that a 2-D projection is available even when K*=1.  When K*=1 we show
-    both the 1-D spectral strip (top panel) and the t-SNE map (bottom panel).
-    If X_orig is None we fall back to the old behaviour.
-    """
-    dim = X_embed.shape[1]
-
-    if X_orig is not None:
-        n_samples = X_orig.shape[0]
-        perp = min(perplexity, n_samples - 1)
-        X_2d = TSNE(n_components=2, perplexity=perp,
-                    random_state=random_state).fit_transform(X_orig)
-
-        if dim == 1:
-            fig, axes = plt.subplots(2, 1, figsize=(8, 9))
-            # top: 1-D spectral strip
-            sc0 = axes[0].scatter(X_embed[:, 0], np.zeros_like(X_embed[:, 0]),
-                                  c=clusters, cmap='tab10', alpha=0.7, s=20)
-            axes[0].set_title("Cluster Assignments (1-D spectral embedding)")
-            axes[0].set_yticks([])
-            plt.colorbar(sc0, ax=axes[0], label="Cluster")
-            # bottom: t-SNE on original data
-            sc1 = axes[1].scatter(X_2d[:, 0], X_2d[:, 1],
-                                  c=clusters, cmap='tab10', alpha=0.7, s=20)
-            axes[1].set_title("Cluster Assignments (t-SNE on original features)")
-            axes[1].set_xlabel("t-SNE dim 1")
-            axes[1].set_ylabel("t-SNE dim 2")
-            plt.colorbar(sc1, ax=axes[1], label="Cluster")
-        else:
-            fig, ax = plt.subplots(figsize=(7, 5))
-            sc = ax.scatter(X_2d[:, 0], X_2d[:, 1],
-                            c=clusters, cmap='tab10', alpha=0.7, s=20)
-            ax.set_title("Cluster Assignments (t-SNE on original features)")
-            ax.set_xlabel("t-SNE dim 1")
-            ax.set_ylabel("t-SNE dim 2")
-            plt.colorbar(sc, ax=ax, label="Cluster")
-
-        plt.tight_layout()
-        plt.show()
-        return
-
-def plot_dag(A, var_names=None, contracted_pairs=None):
-    """
-    Draw the estimated causal DAG.
-
-    Parameters
-    ----------
-    A                : weighted adjacency matrix
-    var_names        : list of original variable name strings
-    contracted_pairs : list of (i, j) pairs that were contracted.
-                       The surviving node (min(i,j)) will be relabelled
-                       "name_i / name_j" and its edges drawn dashed.
-    """
-    q = A.shape[0]
-    labels = {i: (var_names[i] if var_names else f"X{i}") for i in range(q)}
-
-    # ── FIX-1: build relabelled names for contracted nodes ────────────────────
-    contracted_nodes = set()
-    if contracted_pairs:
-        for (i, j) in contracted_pairs:
-            u_keep = min(i, j)
-            u_drop = max(i, j)
-            name_i = var_names[i] if var_names and i < len(var_names) else f"X{i}"
-            name_j = var_names[j] if var_names and j < len(var_names) else f"X{j}"
-            # Relabel the surviving node to show both names
-            labels[u_keep] = f"{name_i}/{name_j}"
-            contracted_nodes.add(u_keep)
-
-    G = nx.DiGraph()
-    G.add_nodes_from(range(q))
-    contracted_edges = set()
-    for i in range(q):
-        for j in range(q):
-            if A[i, j] > 0:
-                G.add_edge(i, j, weight=round(A[i, j], 3))
-                if i in contracted_nodes or j in contracted_nodes:
-                    contracted_edges.add((i, j))
-
-    pos = nx.spring_layout(G, seed=42)
-
-    normal_edges     = [(u, v) for u, v in G.edges() if (u, v) not in contracted_edges]
-    contracted_edges = [(u, v) for u, v in G.edges() if (u, v) in contracted_edges]
-
-    edge_labels = {(u, v): f"{d['weight']:.2f}"
-                   for u, v, d in G.edges(data=True)}
-
-    node_colors = ['tomato' if i in contracted_nodes else 'steelblue'
-                   for i in range(q)]
-
-    plt.figure(figsize=(9, 7))
-    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=900)
-    nx.draw_networkx_labels(G, pos, labels=labels, font_color='white', font_size=8)
-
-    if normal_edges:
-        nx.draw_networkx_edges(G, pos, edgelist=normal_edges,
-                               edge_color='gray', arrows=True,
-                               arrowsize=20, width=1.5)
-    if contracted_edges:
-        nx.draw_networkx_edges(G, pos, edgelist=contracted_edges,
-                               edge_color='tomato', style='dashed',
-                               arrows=True, arrowsize=20, width=1.5)
-
-    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7)
-
-    legend_handles = [
-        mpatches.Patch(color='steelblue', label='Normal node'),
-        mpatches.Patch(color='tomato', label='Contracted node (merged)'),
-        plt.Line2D([0], [0], color='gray',   linestyle='-',  label='Normal edge'),
-        plt.Line2D([0], [0], color='tomato', linestyle='--', label='Contracted-node edge'),
-    ]
-    plt.legend(handles=legend_handles, loc='upper left', fontsize=7)
-    plt.title("Estimated Causal DAG (edge weights = |ATE|)\n"
-              "Tomato nodes/edges = contracted (ambiguous orientation resolved by merging)")
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
-
-
-def run_pc(data, alpha=0.05):
-    """Run PC Algorithm and return a binary directed adjacency matrix."""
-    result = pc(data, indep_test=fisherz, alpha=alpha,
-                uc_rule=0, uc_priority=2,
-                mvpc=False, verbose=False, show_progress=False)
-    G = result.G.graph
+    cg = _cl_pc(data, alpha=alpha, indep_test=_cl_fisherz, uc_rule=0,
+                uc_priority=2, mvpc=False, verbose=False, show_progress=False)
+    G = cg.G.graph
     d = G.shape[0]
     adj = np.zeros((d, d), dtype=int)
-
     for i in range(d):
-        for j in range(d):
-            if G[i, j] == -1 and G[j, i] == -1:
-                adj[i, j] = adj[j, i] = 1          
-            elif G[i, j] == 1 and G[j, i] == -1:
-                adj[i, j] = 1                       
-            elif G[i, j] == -1 and G[j, i] == 1:
-                adj[j, i] = 1                       
+        for j in range(i + 1, d):
+            a, b = G[i, j], G[j, i]
+            if a == -1 and b == 1:          # i -> j
+                adj[i, j] = 1
+            elif a == 1 and b == -1:        # j -> i
+                adj[j, i] = 1
+            elif a != 0 or b != 0:          # i -- j  (or i <-> j)
+                adj[i, j] = adj[j, i] = 1
     return adj
 
 
-def bootstrap_pc(data, B=100, alpha=0.05, theta=0.50, seed=42):
+def _fisher_z_pvalue(C: np.ndarray, n: int, i: int, j: int, S) -> float:
+    idx = [i, j, *S]
+    P = np.linalg.pinv(C[np.ix_(idx, idx)])
+    denom = np.sqrt(abs(P[0, 0] * P[1, 1])) + 1e-300
+    r = float(np.clip(-P[0, 1] / denom, -1 + 1e-12, 1 - 1e-12))
+    z = 0.5 * np.log((1 + r) / (1 - r)) * np.sqrt(max(n - len(S) - 3, 1))
+    return float(2 * stats.norm.sf(abs(z)))
+
+
+def pc_simple(data: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+    """Self-contained PC (Fisher-z skeleton, v-structures, Meek R1-R4).
+
+    Used only when causal-learn is unavailable or fails.
+    """
+    n, d = data.shape
+    C = np.corrcoef(data, rowvar=False)
+    adj = ~np.eye(d, dtype=bool)
+    sepset: dict = {}
+    level = 0
+    while True:
+        tested = False
+        for i in range(d):
+            for j in range(d):
+                if i == j or not adj[i, j]:
+                    continue
+                nbrs = [k for k in range(d) if k not in (i, j) and adj[i, k]]
+                if len(nbrs) < level:
+                    continue
+                tested = True
+                for S in itertools.combinations(nbrs, level):
+                    if _fisher_z_pvalue(C, n, i, j, S) > alpha:
+                        adj[i, j] = adj[j, i] = False
+                        sepset[frozenset((i, j))] = set(S)
+                        break
+        if not tested:
+            break
+        level += 1
+
+    skeleton = [(i, j) for i in range(d) for j in range(i + 1, d) if adj[i, j]]
+    pdag = _PDAG(d, skeleton)
+    pdag.U = {frozenset(e) for e in skeleton}
+    for i, j in itertools.combinations(range(d), 2):        # v-structures
+        if adj[i, j]:
+            continue
+        for k in range(d):
+            if adj[i, k] and adj[j, k] and k not in sepset.get(frozenset((i, j)), set()):
+                for x in (i, j):
+                    if pdag.is_undirected(x, k):
+                        pdag.orient(x, k)
+    apply_meek_rules(pdag, check_acyclic=False)
+    return pdag.to_matrix()
+
+
+def run_pc(data: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+    """Run PC at level alpha and return the PC adjacency matrix (see module doc)."""
+    if HAS_CAUSALLEARN:
+        try:
+            return _pc_causallearn(data, alpha)
+        except Exception:
+            pass
+    return pc_simple(data, alpha)
+
+
+def bootstrap_pc(data: np.ndarray, B: int = 100, alpha: float = 0.05,
+                 seed: int = 42):
+    """Bootstrap PC (Step 1).
+
+    Returns
+    -------
+    f_uv  : inclusion frequency of the unordered pair (symmetric).
+    f_dir : orientation frequency, f_dir[u, v] = fraction of resamples in which
+            u -> v is returned.  Resamples that return the edge undirected count
+            towards neither direction (Assumption 7).
+    rho   : rho[u, v] = f_dir[u, v] / f_uv[u, v]  (0 where f_uv = 0).
+    """
     rng = np.random.default_rng(seed)
     n, d = data.shape
     f_count = np.zeros((d, d))
     g_count = np.zeros((d, d))
-
     for _ in range(B):
         idx = rng.integers(0, n, size=n)
         try:
             G = run_pc(data[idx], alpha=alpha)
         except Exception:
             continue
-
-        for i in range(d):
-            for j in range(i + 1, d):          
-                if G[i, j] != 0 or G[j, i] != 0:
-                    f_count[i, j] += 1
-                    f_count[j, i] += 1          
-                if G[i, j] == 1 and G[j, i] == 0:
-                    g_count[i, j] += 1          
-                elif G[j, i] == 1 and G[i, j] == 0:
-                    g_count[j, i] += 1         
-
+        f_count += ((G + G.T) > 0)
+        g_count += (G == 1) & (G.T == 0)
+    np.fill_diagonal(f_count, 0)
+    np.fill_diagonal(g_count, 0)
     f_uv = f_count / B
-    g_uv = g_count / B
-
-    with np.errstate(invalid="ignore"):
-        rho = np.where(f_uv > 0, g_uv / f_uv, 0.0)
-
-    return f_uv, g_uv, rho
+    f_dir = g_count / B
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rho = np.where(f_uv > 0, f_dir / np.where(f_uv > 0, f_uv, 1.0), 0.0)
+    return f_uv, f_dir, rho
 
 
-def _jarque_bera_fraction(data, alpha=0.10):
+# ═════════════════════════════════════════════════════════════════════════════
+#  STEP 1c ─ JARQUE-BERA, DIRECTLINGAM AND THE OVS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def jarque_bera_count(data: np.ndarray, alpha_jb: float = 0.10) -> int:
+    """n_NG: number of variables whose OLS residuals (each variable regressed
+    on all others) reject Gaussianity at level alpha_JB."""
     n, d = data.shape
     count = 0
     for j in range(d):
         others = [k for k in range(d) if k != j]
-        Xo = sm.add_constant(data[:, others])
+        Xo = sm.add_constant(data[:, others], has_constant="add")
         try:
             resid = sm.OLS(data[:, j], Xo).fit().resid
-            _, p, _, _ = jb_test(resid)
-            if p < alpha:
+            if jarque_bera(resid)[1] < alpha_jb:
                 count += 1
         except Exception:
             pass
-    return count / d
+    return count
 
 
-def run_lingam(data):
-    """Fit DirectLiNGAM and return its adjacency matrix B̂."""
-    model = DirectLiNGAM()
-    model.fit(data)
-    return model.adjacency_matrix_
+def run_lingam(data: np.ndarray, seed: Optional[int] = None) -> np.ndarray:
+    """DirectLiNGAM coefficients in the paper's orientation, B_L[u, v] = B_vu.
+
+    lingam's ``adjacency_matrix_`` follows x = Bx + e, where B[v, u] is the
+    coefficient of x_u in the equation of x_v; we return its transpose so that
+    B_L[u, v] refers to the edge u -> v (Section 6, Step 1).
+    """
+    d = data.shape[1]
+    if not HAS_LINGAM:
+        warnings.warn("lingam is not installed; the LiNGAM term of the OVS is set to 0.")
+        return np.zeros((d, d))
+    model = DirectLiNGAM(random_state=seed)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(data)
+    return np.asarray(model.adjacency_matrix_, dtype=float).T
 
 
-def compute_ovs(f_uv, g_uv, rho, B_hat, w_L=0.20, tau=0.15, theta=0.50):
-    """Compute the Orientation Validation Score for each stable edge."""
+def lingam_weight(n_ng: int, q: int, w_max: float = 0.20) -> float:
+    """w_L = (n_NG / q) * w_max."""
+    return (n_ng / q) * w_max
+
+
+def compute_ovs(f_uv: np.ndarray, rho: np.ndarray, B_L: np.ndarray,
+                w_L: float, gamma: float = 0.15, theta: float = 0.55,
+                use_lingam: bool = True):
+    """Orientation Validation Score (Eq. 2) on the stable skeleton.
+
+        OVS_uv = w_PC * f_uv * e_PC + w_L * e_L,       w_PC = 1 - w_L,
+        e_PC   = rho_uv - rho_vu,
+        e_L    = sign(|B_L_uv| - |B_L_vu|).
+
+    ``use_lingam=False`` forces e_L = 0 for every edge while keeping
+    w_PC = 1 - w_L (ablation A1, Section 7).
+
+    Returns
+    -------
+    orientations : {(i, j): (u, v) or None} for every (i < j) in the stable
+                   skeleton S = {f_uv >= theta}; None means |OVS| <= gamma.
+    ovs_matrix   : antisymmetric matrix with ovs_matrix[i, j] = OVS_ij.
+    """
     w_pc = 1.0 - w_L
     d = f_uv.shape[0]
     ovs_matrix = np.zeros((d, d))
     orientations = {}
-
     for i in range(d):
         for j in range(i + 1, d):
-            if f_uv[i, j] < theta:
+            if f_uv[i, j] < theta or f_uv[i, j] <= 0:
                 continue
-
-            delta_pc = rho[i, j] - rho[j, i]
-            delta_L  = float(np.sign(B_hat[i, j] - B_hat[j, i]))
-            ovs = w_pc * f_uv[i, j] * delta_pc + w_L * delta_L
-
-            ovs_matrix[i, j] =  ovs
-            ovs_matrix[j, i] = -ovs
-
-            if ovs > tau:
+            e_pc = rho[i, j] - rho[j, i]
+            e_l = float(np.sign(abs(B_L[i, j]) - abs(B_L[j, i]))) if use_lingam else 0.0
+            ovs = w_pc * f_uv[i, j] * e_pc + w_L * e_l
+            ovs_matrix[i, j], ovs_matrix[j, i] = ovs, -ovs
+            if ovs > gamma:
                 orientations[(i, j)] = (i, j)
-            elif ovs < -tau:
+            elif ovs < -gamma:
                 orientations[(i, j)] = (j, i)
             else:
                 orientations[(i, j)] = None
-
     return orientations, ovs_matrix
 
 
-def _has_cycle(G_nx: nx.DiGraph) -> bool:
-    return not nx.is_directed_acyclic_graph(G_nx)
+# ═════════════════════════════════════════════════════════════════════════════
+#  STEP 1d ─ RESOLUTION HIERARCHY
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _PDAG:
+    """Partially directed graph over a fixed skeleton."""
+
+    def __init__(self, d: int, skeleton):
+        self.d = d
+        self.adj = {frozenset(e) for e in skeleton}
+        self.D = nx.DiGraph()
+        self.D.add_nodes_from(range(d))
+        self.U: set = set()
+
+    def adjacent(self, a, b) -> bool:
+        return frozenset((a, b)) in self.adj
+
+    def is_undirected(self, a, b) -> bool:
+        return frozenset((a, b)) in self.U
+
+    def creates_cycle(self, a, b) -> bool:
+        """Would adding a -> b close a directed cycle?"""
+        return nx.has_path(self.D, b, a)
+
+    def orient(self, a, b):
+        self.U.discard(frozenset((a, b)))
+        self.D.add_edge(a, b)
+
+    def to_matrix(self) -> np.ndarray:
+        G = np.zeros((self.d, self.d), dtype=int)
+        for e in self.U:
+            a, b = tuple(e)
+            G[a, b] = G[b, a] = 1
+        for a, b in self.D.edges():
+            G[a, b] = 1
+        return G
 
 
-def _apply_meek_r2(G_nx: nx.DiGraph) -> nx.DiGraph:
-    """Meek Rule R2: a→b→c and a–c (undirected) → orient a→c."""
+def _meek_rule(p: _PDAG, a: int, b: int) -> int:
+    """Return the Meek rule (1-4) that orients the undirected edge a -- b as
+    a -> b, or 0 if none applies."""
+    # R1: c -> a, c and b non-adjacent.
+    for c in p.D.predecessors(a):
+        if c != b and not p.adjacent(c, b):
+            return 1
+    # R2: a -> c -> b.
+    for c in p.D.successors(a):
+        if p.D.has_edge(c, b):
+            return 2
+    # R3: a -- c -> b and a -- e -> b with c, e non-adjacent.
+    cs = [c for c in p.D.predecessors(b) if c != a and p.is_undirected(a, c)]
+    for c, e in itertools.combinations(cs, 2):
+        if not p.adjacent(c, e):
+            return 3
+    # R4: a -- c -> e -> b with c, b non-adjacent and a, e adjacent.
+    for c in range(p.d):
+        if c in (a, b) or not p.is_undirected(a, c) or p.adjacent(c, b):
+            continue
+        for e in p.D.successors(c):
+            if e not in (a, b) and p.D.has_edge(e, b) and p.adjacent(a, e):
+                return 4
+    return 0
+
+
+def apply_meek_rules(p: _PDAG, check_acyclic: bool = True, log: Optional[dict] = None):
+    """Apply Meek's rules R1-R4 exhaustively; with ``check_acyclic`` an
+    orientation is accepted only if it does not close a directed cycle."""
     changed = True
     while changed:
         changed = False
-        for a, b in list(G_nx.edges()):
-            for c in list(G_nx.successors(b)):
-                if c == a:
-                    continue
-                if not G_nx.has_edge(a, c) and not G_nx.has_edge(c, a):
-                    continue
-                if G_nx.has_edge(a, c) and not G_nx.has_edge(c, a):
-                    continue
-                if G_nx.has_edge(a, c) and G_nx.has_edge(c, a):
-                    G_nx.remove_edge(c, a)
+        for e in sorted(p.U, key=sorted):
+            if e not in p.U:
+                continue
+            i, j = sorted(e)
+            for a, b in ((i, j), (j, i)):
+                r = _meek_rule(p, a, b)
+                if r and not (check_acyclic and p.creates_cycle(a, b)):
+                    p.orient(a, b)
+                    if log is not None:
+                        log[(i, j)] = f"meek_R{r}"
                     changed = True
-    return G_nx
+                    break
 
 
-def resolve_with_acyclicity(orientations, d, ovs_matrix=None,
-                             domain_order=None):
-   
-    G_nx = nx.DiGraph()
-    G_nx.add_nodes_from(range(d))
-    resolved = {}
-    ambiguous = []
-    contracted_pairs = []          
+class _UnionFind:
+    def __init__(self, n: int):
+        self.parent = list(range(n))
 
-    # ── Step 1 ────────────────────────────────────────────────────────────────
-    for edge, direction in orientations.items():
+    def find(self, x: int) -> int:
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]
+            x = self.parent[x]
+        return x
+
+    def union(self, a: int, b: int):
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self.parent[max(ra, rb)] = min(ra, rb)
+
+
+def notears_h(W: np.ndarray) -> float:
+    """NOTEARS acyclicity function h(W) = tr(exp(W o W)) - d; zero iff DAG."""
+    W = np.asarray(W, dtype=float)
+    return float(np.trace(expm(W * W)) - W.shape[0])
+
+
+@dataclass
+class Resolution:
+    """Fully oriented DAG G_hat = (V*, E_hat) produced by Step 1."""
+    d: int
+    skeleton: list            # stable skeleton S_hat, (i, j) with i < j
+    final_direction: dict     # (i, j) -> (u, v), or None if contracted/symmetrised
+    step: dict                # (i, j) -> how the edge was resolved
+    groups: list              # V*: tuples of original indices (N_S has |S| > 1)
+    group_of: np.ndarray      # original index -> index in V*
+    G_star: nx.DiGraph        # DAG over V*
+    member_edges: dict        # (a, b) in G_star -> original directed edges (u, v)
+    contracted_pairs: list    # pairs merged in Step 1.4 or by cycle breaking
+    symmetric_pairs: list     # ablation A3: residual ambiguous edges kept symmetric
+
+    def node_names(self, var_names: Sequence[str]) -> list:
+        return ["/".join(var_names[m] for m in g) for g in self.groups]
+
+    def merged_nodes(self) -> list:
+        return [k for k, g in enumerate(self.groups) if len(g) > 1]
+
+    def backdoor_members(self, a: int, exclude: Optional[int] = None) -> list:
+        """Original variables in the parents of node a of G_hat (the backdoor
+        set W read off G_hat), excluding node ``exclude``."""
+        out = []
+        for p in self.G_star.predecessors(a):
+            if p != exclude:
+                out.extend(self.groups[p])
+        return sorted(out)
+
+
+def _contract(D: nx.DiGraph, uf: _UnionFind, d: int):
+    members: dict = {}
+    for v in range(d):
+        members.setdefault(uf.find(v), []).append(v)
+    groups = sorted((tuple(sorted(g)) for g in members.values()), key=lambda g: g[0])
+    group_of = np.empty(d, dtype=int)
+    for k, g in enumerate(groups):
+        group_of[list(g)] = k
+    G = nx.DiGraph()
+    G.add_nodes_from(range(len(groups)))
+    member_edges: dict = {}
+    for u, v in D.edges():
+        a, b = int(group_of[u]), int(group_of[v])
+        if a != b:
+            G.add_edge(a, b)
+            member_edges.setdefault((a, b), []).append((u, v))
+    return G, member_edges, groups, group_of
+
+
+def resolve_orientations(orientations: dict, d: int, ovs_matrix: np.ndarray,
+                         domain_order: Optional[Sequence[int]] = None,
+                         ambiguous: str = "contract") -> Resolution:
+    """Resolution hierarchy for edges with |OVS| <= gamma (Section 6, Step 1).
+
+    1. Acyclicity filter: if exactly one orientation is cycle-free, use it.
+    2. Meek rules R1-R4, applied exhaustively.
+    3. Domain or temporal ordering (``domain_order``: earliest first).
+    4. Edge contraction: merge the endpoints into a node N_S.
+       (``ambiguous="symmetrise"`` keeps them as a symmetric pair instead,
+       which is ablation A3.)
+    Acyclicity is checked after each step.  Global acyclicity of G_hat is then
+    confirmed with the NOTEARS condition; while a cycle persists, the edge of
+    that cycle with the lowest |OVS| is contracted.
+    """
+    if ambiguous not in ("contract", "symmetrise"):
+        raise ValueError("ambiguous must be 'contract' or 'symmetrise'")
+    skeleton = sorted(orientations)
+    p = _PDAG(d, skeleton)
+    step: dict = {}
+    for e, direction in orientations.items():
         if direction is None:
-            ambiguous.append(edge)
-            continue
-        u, v = direction
-        G_nx.add_edge(u, v)
-        if _has_cycle(G_nx):
-            G_nx.remove_edge(u, v)
-            G_nx.add_edge(v, u)
-            if _has_cycle(G_nx):
-                G_nx.remove_edge(v, u)
-                ambiguous.append(edge)
-            else:
-                resolved[edge] = (v, u)
+            p.U.add(frozenset(e))
         else:
-            resolved[edge] = direction
+            p.D.add_edge(*direction)
+            step[e] = "ovs"
 
-    # ── Step 2 ────────────────────────────────────────────────────────────────
-    G_nx = _apply_meek_r2(G_nx)
+    # 1. Acyclicity filter
+    changed = True
+    while changed:
+        changed = False
+        for e in sorted(p.U, key=sorted):
+            i, j = sorted(e)
+            c_ij, c_ji = p.creates_cycle(i, j), p.creates_cycle(j, i)
+            if c_ij != c_ji:
+                p.orient(*((j, i) if c_ij else (i, j)))
+                step[(i, j)] = "acyclicity"
+                changed = True
 
-    # ── Step 3 ────────────────────────────────────────────────────────────────
-    still_ambiguous = []
+    # 2. Meek rules
+    apply_meek_rules(p, check_acyclic=True, log=step)
+
+    # 3. Domain ordering
     if domain_order is not None:
-        order_map = {v: k for k, v in enumerate(domain_order)}
-        for (i, j) in ambiguous:
-            if i in order_map and j in order_map:
-                u, v = (i, j) if order_map[i] < order_map[j] else (j, i)
-                G_nx.add_edge(u, v)
-                if not _has_cycle(G_nx):
-                    resolved[(i, j)] = (u, v)
-                else:
-                    G_nx.remove_edge(u, v)
-                    still_ambiguous.append((i, j))
-            else:
-                still_ambiguous.append((i, j))
-    else:
-        still_ambiguous = ambiguous
+        rank = {v: r for r, v in enumerate(domain_order)}
+        for e in sorted(p.U, key=sorted):
+            i, j = sorted(e)
+            if i in rank and j in rank and rank[i] != rank[j]:
+                u, v = (i, j) if rank[i] < rank[j] else (j, i)
+                if not p.creates_cycle(u, v):
+                    p.orient(u, v)
+                    step[(i, j)] = "domain_order"
 
-    # ── Step 4: contraction ───────────────────────────────────────────────────
-    if ovs_matrix is not None:
-        still_ambiguous.sort(key=lambda e: abs(ovs_matrix[e[0], e[1]]))
-    for (i, j) in still_ambiguous:
-        if not G_nx.has_node(i) or not G_nx.has_node(j):
-            continue
-        u_keep = min(i, j)
-        u_drop = max(i, j)
-        if not G_nx.has_node(u_drop):
-            continue
-        for pred in list(G_nx.predecessors(u_drop)):
-            if pred != u_keep and G_nx.has_node(pred) \
-                    and not G_nx.has_edge(pred, u_keep):
-                G_nx.add_edge(pred, u_keep)
-        for succ in list(G_nx.successors(u_drop)):
-            if succ != u_keep and G_nx.has_node(succ) \
-                    and not G_nx.has_edge(u_keep, succ):
-                G_nx.add_edge(u_keep, succ)
-        G_nx.remove_node(u_drop)
-        resolved[(i, j)] = (u_keep, -1)
-        contracted_pairs.append((i, j))       
+    # 4. Contraction (or symmetrisation for A3)
+    uf = _UnionFind(d)
+    contracted, symmetric = [], []
+    residual = sorted((tuple(sorted(e)) for e in p.U),
+                      key=lambda e: (abs(ovs_matrix[e]), e))
+    for i, j in residual:
+        if ambiguous == "symmetrise":
+            symmetric.append((i, j))
+            step[(i, j)] = "symmetrised"
+        else:
+            uf.union(i, j)
+            contracted.append((i, j))
+            step[(i, j)] = "contracted"
 
-    return resolved, G_nx, contracted_pairs
+    # Global acyclicity check (NOTEARS) and cycle breaking
+    while True:
+        G_star, member_edges, groups, group_of = _contract(p.D, uf, d)
+        W = nx.to_numpy_array(G_star, nodelist=range(len(groups)))
+        if notears_h(W) <= 1e-8 and nx.is_directed_acyclic_graph(G_star):
+            break
+        cycle = nx.find_cycle(G_star)
+        candidates = [e for (a, b, *_) in cycle for e in member_edges[(a, b)]]
+        u, v = min(candidates, key=lambda e: (abs(ovs_matrix[e]), e))
+        uf.union(u, v)
+        key = (min(u, v), max(u, v))
+        contracted.append(key)
+        step[key] = "cycle_contracted"
+
+    symmetric = [(i, j) for (i, j) in symmetric if group_of[i] != group_of[j]]
+    final_direction = {}
+    for i, j in skeleton:
+        if (i, j) in symmetric or group_of[i] == group_of[j]:
+            final_direction[(i, j)] = None
+        elif p.D.has_edge(i, j):
+            final_direction[(i, j)] = (i, j)
+        elif p.D.has_edge(j, i):
+            final_direction[(i, j)] = (j, i)
+        else:
+            final_direction[(i, j)] = None
+
+    return Resolution(d=d, skeleton=skeleton, final_direction=final_direction,
+                      step=step, groups=groups, group_of=group_of, G_star=G_star,
+                      member_edges=member_edges, contracted_pairs=contracted,
+                      symmetric_pairs=symmetric)
 
 
-def _reset_test(y, X_reg, alpha=0.05):
-    Xc = sm.add_constant(X_reg)
+# ═════════════════════════════════════════════════════════════════════════════
+#  STEP 2 ─ CAUSAL EDGE WEIGHTS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def reset_test_pvalue(y: np.ndarray, X_reg: np.ndarray) -> float:
+    """Ramsey RESET p-value: adds the squared and cubed fitted values of the
+    OLS regression of y on X_reg and F-tests their joint significance."""
     try:
+        Xc = sm.add_constant(X_reg, has_constant="add")
         res0 = sm.OLS(y, Xc).fit()
         yhat = res0.fittedvalues
-        X_aug = np.column_stack([Xc, yhat ** 2, yhat ** 3])
+        sd = yhat.std()
+        if sd < 1e-12:
+            return 1.0
+        z = (yhat - yhat.mean()) / sd          # same column space, better conditioned
+        X_aug = np.column_stack([Xc, z ** 2, z ** 3])
         res1 = sm.OLS(y, X_aug).fit()
-        ss0, ss1 = res0.ssr, res1.ssr
         df_den = len(y) - X_aug.shape[1]
-        if df_den <= 0 or ss1 < 1e-12:
-            return True
-        F = ((ss0 - ss1) / 2) / (ss1 / df_den)
-        p = 1 - __import__('scipy').stats.f.cdf(F, 2, df_den)
-        return p > alpha
+        if df_den <= 0 or res1.ssr < 1e-12:
+            return 1.0
+        F = ((res0.ssr - res1.ssr) / 2) / (res1.ssr / df_den)
+        return float(stats.f.sf(F, 2, df_den))
     except Exception:
-        return True
+        return 1.0
 
 
-def _ols_ate(y, t, Z):
-    if Z.shape[1] > 0:
-        X_reg = sm.add_constant(np.column_stack([t, Z]))
-        coef_idx = 1
-    else:
-        X_reg = sm.add_constant(t)
-        coef_idx = 1
-    try:
-        res = sm.OLS(y, X_reg).fit()
-        return float(res.params[coef_idx])
-    except Exception:
-        return float(LinearRegression().fit(t.reshape(-1, 1), y).coef_[0])
+def ols_ace(y: np.ndarray, t: np.ndarray, W: np.ndarray) -> float:
+    """Coefficient on t in the OLS regression of y on (t, W)."""
+    X = np.column_stack([t, W]) if W.shape[1] else t.reshape(-1, 1)
+    return float(sm.OLS(y, sm.add_constant(X, has_constant="add")).fit().params[1])
 
 
-def _dml_ate(y, t, Z, K=5, seed=42):
-    n = len(y)
-    V_res = np.zeros(n)
-    U_res = np.zeros(n)
-    kf = KFold(n_splits=K, shuffle=True, random_state=seed)
-
-    for tr, te in kf.split(np.arange(n)):
-        X_tr, X_te = Z[tr], Z[te]
-        y_tr, y_te = y[tr], y[te]
-        t_tr, t_te = t[tr], t[te]
-
-        if Z.shape[1] == 0:
-            V_res[te] = y_te - y_tr.mean()
-            U_res[te] = t_te - t_tr.mean()
-            continue
-
+def _fit_nuisance(W_tr, y_tr, seed: int, learner: str):
+    if learner == "gam" and HAS_GAM:
         try:
-            n_sp = min(20, max(4, len(tr) // 10))
-            terms = sum(s(j, n_splines=n_sp) for j in range(Z.shape[1]))
-            m_y = LinearGAM(terms).fit(X_tr, y_tr)
-            m_t = LinearGAM(terms).fit(X_tr, t_tr)
-            V_res[te] = y_te - m_y.predict(X_te)
-            U_res[te] = t_te - m_t.predict(X_te)
+            n_sp = min(20, max(4, len(y_tr) // 10))
+            terms = gam_s(0, n_splines=n_sp)
+            for j in range(1, W_tr.shape[1]):
+                terms = terms + gam_s(j, n_splines=n_sp)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                gam = LinearGAM(terms).fit(W_tr, y_tr)
+            return gam.predict
         except Exception:
-            rf_y = RandomForestRegressor(100, random_state=seed).fit(X_tr, y_tr)
-            rf_t = RandomForestRegressor(100, random_state=seed).fit(X_tr, t_tr)
-            V_res[te] = y_te - rf_y.predict(X_te)
-            U_res[te] = t_te - rf_t.predict(X_te)
-
-    denom = np.sum(U_res ** 2)
-    return float(np.sum(U_res * V_res) / denom) if denom > 1e-12 else 0.0
+            pass
+    rf = RandomForestRegressor(n_estimators=100, min_samples_leaf=5,
+                               random_state=seed, n_jobs=1).fit(W_tr, y_tr)
+    return rf.predict
 
 
-def _backdoor_set(G_nx: nx.DiGraph, u: int, v: int) -> list[int]:
-    if not G_nx.has_node(u) or not G_nx.has_node(v):
-        return []
-    try:
-        desc_u = nx.descendants(G_nx, u)
-    except Exception:
-        desc_u = set()
-    try:
-        parents = [w for w in G_nx.predecessors(u)
-                   if w not in desc_u and w != v and G_nx.has_node(w)]
-    except nx.NetworkXError:
-        parents = []
-    return parents
+def dml_ace(y: np.ndarray, t: np.ndarray, W: np.ndarray, n_fold: int = 5,
+            seed: int = 42, learner: str = "gam", return_se: bool = False):
+    """Cross-fitted partially linear DML estimate (Eq. 3).
 
-
-def estimate_weights(data, resolved_edges, G_nx, f_uv,
-                     alpha_reset=0.05, dml_k=5):
-    d = data.shape[1]
-    A = np.zeros((d, d))
-
-    for (i, j), direction in resolved_edges.items():
-        u, v = direction
-        if v == -1:
+    The outcome regression l(w) = E[y | W] and the treatment regression
+    m(w) = E[t | W] are fitted on the complement of each fold (GAM, or a random
+    forest if the GAM fails or ``learner="rf"``); the estimate is
+    sum(R_t R_y) / sum(R_t^2) of the cross-fitted residuals.  With
+    ``return_se`` the influence-function standard error is returned as well.
+    """
+    y = np.asarray(y, float)
+    t = np.asarray(t, float)
+    W = np.asarray(W, float).reshape(len(y), -1)
+    n = len(y)
+    r_y, r_t = np.zeros(n), np.zeros(n)
+    for tr, te in KFold(n_splits=n_fold, shuffle=True, random_state=seed).split(y):
+        if W.shape[1] == 0:
+            r_y[te] = y[te] - y[tr].mean()
+            r_t[te] = t[te] - t[tr].mean()
             continue
-        if u >= d or v >= d:
-            continue
-        if not G_nx.has_node(u) or not G_nx.has_node(v):
-            continue
-
-        t  = data[:, u]
-        y  = data[:, v]
-        bd = _backdoor_set(G_nx, u, v)
-        bd = [b for b in bd if b < d and G_nx.has_node(b)]
-        Z  = data[:, bd] if bd else np.empty((len(y), 0))
-
-        X_reg = np.column_stack([t, Z]) if Z.shape[1] > 0 else t.reshape(-1, 1)
-        linear = _reset_test(y, X_reg, alpha=alpha_reset)
-
-        ate = _ols_ate(y, t, Z) if linear else _dml_ate(y, t, Z, K=dml_k)
-        fij = f_uv[u, v] if u < f_uv.shape[0] and v < f_uv.shape[1] else 1.0
-        A[u, v] = fij * abs(ate)
-
-    if A.sum() == 0:
-        print("[CSC-PC] WARNING: Adjacency matrix is all-zero. "
-              "No causal structure was recovered.")
-    return A
+        m_y = _fit_nuisance(W[tr], y[tr], seed, learner)
+        m_t = _fit_nuisance(W[tr], t[tr], seed, learner)
+        r_y[te] = y[te] - m_y(W[te])
+        r_t[te] = t[te] - m_t(W[te])
+    denom = np.sum(r_t ** 2)
+    est = float(np.sum(r_t * r_y) / denom) if denom > 1e-12 else 0.0
+    if not return_se:
+        return est
+    J = np.mean(r_t ** 2)
+    psi = (r_y - est * r_t) * r_t
+    se = float(np.sqrt(np.mean(psi ** 2) / (J ** 2) / n)) if J > 1e-12 else np.nan
+    return est, se
 
 
-def compute_stationary_distribution(P):
-    """Solve π = πP via left eigenvector for eigenvalue 1."""
-    eigvals, eigvecs = eig(P.T)
-    idx = np.argmin(np.abs(eigvals - 1.0))
-    pi = np.real(eigvecs[:, idx])
-    pi = np.abs(pi)
-    pi /= pi.sum()
-    return pi
+def edge_ace(data: np.ndarray, u: int, v: int, W_idx: Sequence[int],
+             alpha_reset: float = 0.05, n_fold: int = 5, seed: int = 42):
+    """tau_hat for u -> v with backdoor set W: OLS if RESET (p > alpha_RESET)
+    does not reject linearity, DML otherwise.  Returns (tau, track, p_RESET)."""
+    y, t = data[:, v], data[:, u]
+    W = data[:, list(W_idx)] if len(W_idx) else np.empty((len(y), 0))
+    X_reg = np.column_stack([t, W]) if W.shape[1] else t.reshape(-1, 1)
+    p_reset = reset_test_pvalue(y, X_reg)
+    if p_reset > alpha_reset:
+        try:
+            return ols_ace(y, t, W), "OLS", p_reset
+        except Exception:
+            pass
+    return dml_ace(y, t, W, n_fold=n_fold, seed=seed), "DML", p_reset
 
 
-def compute_laplacian(A, alpha=0.15):
-    """PageRank-normalise A → P, compute π, P*, and Chung Laplacian L."""
-    d = A.shape[0]
-    row_sums = A.sum(axis=1, keepdims=True)
-    row_sums_safe = np.where(row_sums == 0, 1.0, row_sums)
-    P0 = A / row_sums_safe
-    P0[row_sums.flatten() == 0] = 1.0 / d
-    P = (1 - alpha) * P0 + (alpha / d) * np.ones((d, d))
+def estimate_edge_weights(data: np.ndarray, res: Resolution, f_weight: np.ndarray,
+                          alpha_reset: float = 0.05, n_fold: int = 5, seed: int = 42):
+    """Stability-weighted adjacency matrix A_stab over V* (Step 2).
 
-    pi = compute_stationary_distribution(P)
-    pi_safe = np.where(pi > 1e-12, pi, 1e-12)
+    Every original directed edge u -> v gets A_stab_uv = f_uv * |tau_hat_uv|,
+    with the backdoor set read off G_hat (members of the parents of u's node).
+    A merged node N_S takes the average over S of its members' entries
+    (absent edges count as 0); between two merged nodes the average runs over
+    both member sets.  Symmetric pairs (ablation A3) receive
+    A_uv = A_vu = f_uv * (|tau_uv| + |tau_vu|) / 2  (Remark 3).
 
-    P_star = (pi[np.newaxis, :] / pi_safe[:, np.newaxis]) * P.T
+    Returns (A_stab, records), where records holds one dict per member edge.
+    """
+    m = len(res.groups)
+    A = np.zeros((m, m))
+    records = []
+    for (a, b), edges in sorted(res.member_edges.items()):
+        W_idx = res.backdoor_members(a, exclude=b)
+        total = 0.0
+        for u, v in edges:
+            tau, track, p = edge_ace(data, u, v, W_idx, alpha_reset, n_fold, seed)
+            a_stab = f_weight[u, v] * abs(tau)
+            total += a_stab
+            records.append(dict(u=u, v=v, node_u=a, node_v=b, backdoor=tuple(W_idx),
+                                tau_hat=tau, A_uv=abs(tau), f_uv=f_weight[u, v],
+                                A_stab=a_stab, track=track, reset_p=p, symmetric=False))
+        A[a, b] = total / (len(res.groups[a]) * len(res.groups[b]))
+    for i, j in res.symmetric_pairs:
+        a, b = int(res.group_of[i]), int(res.group_of[j])
+        tau_ij, tr_ij, p_ij = edge_ace(data, i, j, res.backdoor_members(a, b),
+                                       alpha_reset, n_fold, seed)
+        tau_ji, tr_ji, p_ji = edge_ace(data, j, i, res.backdoor_members(b, a),
+                                       alpha_reset, n_fold, seed)
+        a_sym = f_weight[i, j] * 0.5 * (abs(tau_ij) + abs(tau_ji))
+        scale = len(res.groups[a]) * len(res.groups[b])
+        A[a, b] += a_sym / scale
+        A[b, a] += a_sym / scale
+        for (u, v, na, nb, tau, tr, p) in ((i, j, a, b, tau_ij, tr_ij, p_ij),
+                                          (j, i, b, a, tau_ji, tr_ji, p_ji)):
+            records.append(dict(u=u, v=v, node_u=na, node_v=nb, backdoor=(),
+                                tau_hat=tau, A_uv=abs(tau), f_uv=f_weight[i, j],
+                                A_stab=a_sym, track=tr, reset_p=p, symmetric=True))
+    return A, records
 
-    L = np.eye(d) - 0.5 * (P + P_star)
-    L = 0.5 * (L + L.T)
-    return L, P, pi
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  STEP 3 ─ CHUNG DIRECTED LAPLACIAN AND SPECTRAL DECOMPOSITION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def transition_matrix(A: np.ndarray, alpha_pr: float = 0.15) -> np.ndarray:
+    """Eq. (4): P = (1 - alpha_PR) D^{-1} A + (alpha_PR / |V*|) 11^T, with
+    dangling rows (zero out-degree) of D^{-1} A replaced by the uniform row."""
+    m = A.shape[0]
+    row = A.sum(axis=1)
+    P0 = np.empty_like(A, dtype=float)
+    dangling = row <= 0
+    P0[~dangling] = A[~dangling] / row[~dangling, None]
+    P0[dangling] = 1.0 / m
+    return (1 - alpha_pr) * P0 + (alpha_pr / m) * np.ones((m, m))
 
 
-def spectral_gap(L):
+def stationary_distribution(P: np.ndarray) -> np.ndarray:
+    """pi with pi^T P = pi^T and sum(pi) = 1 (unique since alpha_PR > 0)."""
+    vals, vecs = eig(P.T)
+    pi = np.abs(np.real(vecs[:, np.argmin(np.abs(vals - 1.0))]))
+    return pi / pi.sum()
+
+
+def compute_laplacian(A: np.ndarray, alpha_pr: float = 0.15):
+    """Chung's directed Laplacian (Eq. 5):
+
+        L = I - 1/2 (Pi^{1/2} P Pi^{-1/2} + Pi^{-1/2} P^T Pi^{1/2}).
+
+    L is symmetric positive semi-definite with lambda_1 = 0 and eigenvector
+    proportional to pi^{1/2}.  Returns (L, P, pi).
+    """
+    P = transition_matrix(A, alpha_pr)
+    pi = stationary_distribution(P)
+    s = np.sqrt(pi)
+    M = (s[:, None] * P) / s[None, :]          # Pi^{1/2} P Pi^{-1/2}
+    L = np.eye(A.shape[0]) - 0.5 * (M + M.T)
+    return 0.5 * (L + L.T), P, pi                # remove round-off asymmetry
+
+
+def select_dimension(L: np.ndarray):
+    """K_hat = argmax_{2 <= j <= |V*|-1} (lambda_{j+1} - lambda_j) and
+    Phi_K = [phi_2, ..., phi_{K+1}] (the trivial gap lambda_2 - lambda_1 is
+    excluded).  Returns (Phi_K, K_hat, eigvals, eigvecs)."""
+    m = L.shape[0]
+    if m < 2:
+        raise ValueError("V* has fewer than two nodes; no spectral embedding exists.")
     eigvals, eigvecs = np.linalg.eigh(L)
-    order   = np.argsort(eigvals)
-    eigvals = eigvals[order]
-    eigvecs = eigvecs[:, order]
-
-    gaps = np.diff(eigvals)
-
-    if len(gaps) <= 1:
-        # Degenerate: only 2 eigenvalues
-        K_star = 1
+    if m == 2:
+        K = 1
     else:
-        non_trivial_gaps = gaps[1:]
-        best_idx = int(np.argmax(non_trivial_gaps))  
-        K_star = best_idx + 2                          
-        K_star = max(2, K_star)                       
-    K_star = min(K_star, L.shape[0] - 2)
-    K_star = max(1, K_star)
-
-    V_K = eigvecs[:, 1:K_star + 1]    
-    return V_K, K_star, eigvals
+        gaps = np.diff(eigvals)                 # gaps[j-1] = lambda_{j+1} - lambda_j
+        js = np.arange(2, m)
+        K = int(js[np.argmax(gaps[js - 1])])
+    return eigvecs[:, 1:K + 1], K, eigvals, eigvecs
 
 
-def _gap_statistic(X_emb, k, B_ref=50, seed=42):
-    """Gap statistic for a given k."""
-    rng  = np.random.default_rng(seed)
-    km   = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(X_emb)
-    wcss = km.inertia_
+# ═════════════════════════════════════════════════════════════════════════════
+#  STEP 4 ─ CAUSAL SPECTRAL EMBEDDING AND CLUSTERING
+# ═════════════════════════════════════════════════════════════════════════════
 
-    ref_logs = []
-    lo, hi = X_emb.min(axis=0), X_emb.max(axis=0)
-    for _ in range(B_ref):
-        Xr = rng.uniform(lo, hi, size=X_emb.shape)
-        ref_logs.append(
-            np.log(KMeans(n_clusters=k, n_init=5,
-                          random_state=seed).fit(Xr).inertia_ + 1e-12)
-        )
-    gap = np.mean(ref_logs) - np.log(wcss + 1e-12)
-    sdk = np.std(ref_logs) * np.sqrt(1 + 1 / B_ref)
-    return gap, sdk
+def build_X_std(data: np.ndarray, groups: Sequence[Sequence[int]]) -> np.ndarray:
+    """Column-standardized data over V*: each merged node N_S is the
+    element-wise average of the standardized columns in S."""
+    Z = StandardScaler().fit_transform(np.asarray(data, float))
+    return np.column_stack([Z[:, list(g)].mean(axis=1) for g in groups])
 
 
-def embed_and_cluster(data, V_K, K_star, B_ref=50, seed=42):
-    """Project data onto V_K and select k* via Silhouette + Gap statistic."""
-    X_embed = data @ V_K
-
-    k_range = range(2, min(K_star + 3, X_embed.shape[0]))
-    sil_scores = {}
-    gap_scores = {}
-    gap_sds    = {}
-
-    for k in k_range:
-        labels = KMeans(n_clusters=k, n_init=20,
-                        random_state=seed).fit_predict(X_embed)
-        sil_scores[k] = (silhouette_score(X_embed, labels)
-                         if len(set(labels)) > 1 else -1)
-        gap_scores[k], gap_sds[k] = _gap_statistic(X_embed, k,
-                                                    B_ref=B_ref, seed=seed)
-
-    k_sil = max(sil_scores, key=sil_scores.get)
-
-    k_gap  = k_sil
-    k_list = sorted(gap_scores)
-    for idx, k in enumerate(k_list[:-1]):
-        k_next = k_list[idx + 1]
-        if gap_scores[k] >= gap_scores[k_next] - gap_sds[k_next]:
-            k_gap = k
-            break
-
-    k_star = k_sil
-    clusters = KMeans(n_clusters=k_star, n_init=50,
-                      random_state=seed).fit_predict(X_embed)
-
-    diagnostics = {
-        "k_silhouette" : k_sil,
-        "k_gap"        : k_gap,
-        "sil_scores"   : sil_scores,
-        "gap_scores"   : gap_scores,
-        "criteria_agree": k_sil == k_gap,
-    }
-    return clusters, X_embed, k_star, diagnostics
+def gap_statistic(X: np.ndarray, k: int, B_ref: int = 50, seed: int = 42):
+    """Gap statistic of Tibshirani et al. with uniform reference data over the
+    bounding box of X.  Returns (Gap(k), s_k)."""
+    rng = np.random.default_rng(seed)
+    wk = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(X).inertia_
+    lo, hi = X.min(axis=0), X.max(axis=0)
+    ref = [np.log(KMeans(n_clusters=k, n_init=5, random_state=seed)
+                  .fit(rng.uniform(lo, hi, size=X.shape)).inertia_ + 1e-12)
+           for _ in range(B_ref)]
+    return float(np.mean(ref) - np.log(wk + 1e-12)), float(np.std(ref) * np.sqrt(1 + 1 / B_ref))
 
 
-def CSC_PC_PIPELINE(
-    data,
-    var_names=None,
-    alpha_ci=0.05,
-    B=100,
-    theta=0.50,
-    tau=0.15,
-    w_L_max=0.20,
-    alpha_pr=0.15,
-    alpha_reset=0.05,
-    dml_k=5,
-    domain_order=None,
-    B_ref=50,
-    seed=42,
-    visualise=True,
-    verbose=True,
-):
+def relabel_by_size(labels: np.ndarray) -> np.ndarray:
+    """Relabel clusters 0, 1, ... in order of decreasing size."""
+    uniq, counts = np.unique(labels, return_counts=True)
+    order = uniq[np.argsort(-counts, kind="stable")]
+    mapping = {old: new for new, old in enumerate(order)}
+    return np.array([mapping[x] for x in labels])
 
+
+def embed_and_cluster(X_std: np.ndarray, Phi: np.ndarray, k_max: int = 9,
+                      B_ref: int = 50, seed: int = 42, gap: bool = True):
+    """X_tilde = X_std Phi_K (Eq. 7); k-means for k in {2, ..., k_max};
+    k* maximizes the Silhouette score.  The Gap-statistic choice (smallest k
+    with Gap(k) >= Gap(k+1) - s_{k+1}) is reported as a diagnostic."""
+    X_emb = X_std @ Phi
+    n = X_emb.shape[0]
+    ks = list(range(2, min(k_max, n - 1) + 1))
+    sil, gaps, sds = {}, {}, {}
+    for k in ks:
+        labels = KMeans(n_clusters=k, n_init=20, random_state=seed).fit_predict(X_emb)
+        sil[k] = silhouette_score(X_emb, labels) if len(set(labels)) > 1 else -1.0
+        if gap:
+            gaps[k], sds[k] = gap_statistic(X_emb, k, B_ref=B_ref, seed=seed)
+    k_star = max(sil, key=sil.get)
+    k_gap = None
+    if gap:
+        k_gap = ks[-1]
+        for k, k_next in zip(ks[:-1], ks[1:]):
+            if gaps[k] >= gaps[k_next] - sds[k_next]:
+                k_gap = k
+                break
+    clusters = KMeans(n_clusters=k_star, n_init=50, random_state=seed).fit_predict(X_emb)
+    diagnostics = dict(k_silhouette=k_star, k_gap=k_gap, sil_scores=sil,
+                       gap_scores=gaps, gap_sds=sds,
+                       criteria_agree=(k_gap == k_star) if gap else None)
+    return relabel_by_size(clusters), X_emb, k_star, diagnostics
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  FULL PIPELINE
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _as_index(x, names):
+    if x is None:
+        return None
+    return names.index(x) if isinstance(x, str) else int(x)
+
+
+def caspect(data, var_names: Optional[Sequence[str]] = None,
+            treat_idx=None, outcome_idx=None, *,
+            alpha_ci: float = DEFAULTS["alpha_ci"], B: int = DEFAULTS["B"],
+            theta: float = DEFAULTS["theta"], gamma: float = DEFAULTS["gamma"],
+            w_max: float = DEFAULTS["w_max"], alpha_jb: float = DEFAULTS["alpha_jb"],
+            alpha_reset: float = DEFAULTS["alpha_reset"],
+            alpha_pr: float = DEFAULTS["alpha_pr"], n_fold: int = DEFAULTS["n_fold"],
+            k_max: int = DEFAULTS["k_max"], domain_order=None, B_ref: int = 50,
+            seed: int = 42, pc_only: bool = False, no_stability: bool = False,
+            symmetrise: bool = False, gap_statistic_diag: bool = True,
+            visualise: bool = False, save_dir: Optional[str] = None,
+            verbose: bool = True) -> dict:
+    """Run CaSPECT (Algorithm 1) on an n x q data matrix.
+
+    Parameters (see Table 2 for the defaults)
+    ----------
+    data         : array (n, q) with the covariates, the treatment Z and the
+                   outcome Y as columns.
+    var_names    : column names (used for logging, plots and ``domain_order``).
+    treat_idx, outcome_idx : optional index or name of Z and Y; only used for
+                   diagnostics (whether Z and Y were merged, whether a
+                   directed path Z ~> Y survives in G_hat).
+    domain_order : optional list of indices or names, earliest first, used in
+                   Step 3 of the resolution hierarchy.
+    pc_only      : ablation A1, e_L = 0 for all edges.
+    no_stability : ablation A2, f_uv = 1 for every pair seen in any resample.
+    symmetrise   : ablation A3, symmetrize residual ambiguous edges instead of
+                   contracting them.
+    gap_statistic_diag : compute the Gap statistic (slow on large n).
+    visualise    : draw Figures 1-3 style plots; saved to ``save_dir`` if given.
+
+    Returns a dict with, among others, ``clusters`` (labelled by decreasing
+    size), ``embedding``, ``adjacency`` (A_stab over V*), ``laplacian``,
+    ``K_hat``, ``k_star``, ``resolution`` and ``edge_records``.
+    """
     def log(msg):
         if verbose:
-            print(f"[CSC-PC] {msg}")
+            print(f"[CaSPECT] {msg}")
 
-    data = np.array(data, dtype=float)
+    X = np.asarray(data, dtype=float)
+    n, d = X.shape
+    names = list(var_names) if var_names is not None else [f"X{i}" for i in range(d)]
+    z_idx, y_idx = _as_index(treat_idx, names), _as_index(outcome_idx, names)
+    order_idx = [_as_index(v, names) for v in domain_order] if domain_order else None
+    Xs = StandardScaler().fit_transform(X)
+    if not 0 < w_max < 0.5:
+        warnings.warn("The paper requires w_max in (0, 0.5).")
 
-    data_for_tsne = StandardScaler().fit_transform(data)
+    # ── Step 1: DAG formation ────────────────────────────────────────────────
+    log(f"Step 1a: PC algorithm (alpha_n = {alpha_ci}) ...")
+    G_pc = run_pc(Xs, alpha=alpha_ci)
 
-    data = StandardScaler().fit_transform(data)
-    n, d = data.shape
+    log(f"Step 1b: bootstrap stability ({B} resamples) ...")
+    f_uv, f_dir, rho = bootstrap_pc(Xs, B=B, alpha=alpha_ci, seed=seed)
+    f_eff = (f_uv > 0).astype(float) if no_stability else f_uv
+    n_skel = int(np.sum(np.triu(f_eff >= theta, 1) & np.triu(f_eff > 0, 1)))
+    log(f"  stable skeleton (f_uv >= {theta}): {n_skel} edges")
 
-    log("Stage 1a: PC Algorithm …")
-    _ = run_pc(data, alpha=alpha_ci)
+    log("Step 1c: Jarque-Bera, DirectLiNGAM and OVS ...")
+    n_ng = jarque_bera_count(Xs, alpha_jb=alpha_jb)
+    w_L = lingam_weight(n_ng, d, w_max)
+    log(f"  n_NG = {n_ng}/{d}  ->  w_L = {w_L:.3f},  w_PC = {1 - w_L:.3f}")
+    if w_L <= gamma:
+        log(f"  note: w_L <= gamma = {gamma}; Proposition 1(ii) (reversible edges) does not apply")
+    if w_L >= (1 - gamma) / 2:
+        log("  note: w_L >= (1 - gamma)/2; Proposition 1(i) robustness does not apply")
+    use_lingam = (not pc_only) and w_L > 0
+    B_L = run_lingam(Xs, seed=seed) if use_lingam else np.zeros((d, d))
+    orientations, ovs_matrix = compute_ovs(f_eff, rho, B_L, w_L, gamma=gamma,
+                                           theta=theta, use_lingam=use_lingam)
+    n_amb = sum(v is None for v in orientations.values())
+    log(f"  oriented by OVS: {len(orientations) - n_amb},  |OVS| <= gamma: {n_amb}")
 
-   
-    log(f"Stage 1b: Bootstrap stability ({B} resamples) …")
-    f_uv, g_uv, rho = bootstrap_pc(data, B=B, alpha=alpha_ci,
-                                    theta=theta, seed=seed)
+    log("Step 1d: resolution hierarchy ...")
+    res = resolve_orientations(orientations, d, ovs_matrix, domain_order=order_idx,
+                               ambiguous="symmetrise" if symmetrise else "contract")
+    node_names = res.node_names(names)
+    counts: dict = {}
+    for s_ in res.step.values():
+        counts[s_] = counts.get(s_, 0) + 1
+    log(f"  resolution steps used: {counts}")
+    log(f"  G_hat: |V*| = {len(res.groups)} nodes, {res.G_star.number_of_edges()} edges")
+    for i, j in res.contracted_pairs:
+        log(f"  contracted {names[i]} <-> {names[j]}  (OVS = {ovs_matrix[i, j]:+.3f})")
 
-    log("Stage 1c: LiNGAM diagnostic + OVS …")
-    ng_frac = _jarque_bera_fraction(data)
-    w_L = min(ng_frac, 1.0) * w_L_max
-    log(f"  Non-Gaussian fraction: {ng_frac:.2f} → w_L = {w_L:.3f}")
+    # ── Step 2: edge weights ─────────────────────────────────────────────────
+    log("Step 2: causal edge weights (RESET -> OLS / DML) ...")
+    A_stab, records = estimate_edge_weights(Xs, res, f_eff, alpha_reset=alpha_reset,
+                                            n_fold=n_fold, seed=seed)
+    n_dml = sum(r["track"] == "DML" for r in records)
+    log(f"  {len(records)} member edges: {len(records) - n_dml} OLS, {n_dml} DML")
+    if A_stab.sum() == 0:
+        warnings.warn("A_stab is all zero: no causal structure was recovered.")
 
-    B_hat = run_lingam(data) if w_L > 0 else np.zeros((d, d))
-    orientations, ovs_matrix = compute_ovs(
-        f_uv, g_uv, rho, B_hat, w_L=w_L, tau=tau, theta=theta,
-    )
-    n_oriented  = sum(1 for v in orientations.values() if v is not None)
-    n_ambiguous = sum(1 for v in orientations.values() if v is None)
-    log(f"  Oriented: {n_oriented}, Ambiguous: {n_ambiguous}")
+    X_std = build_X_std(X, res.groups)
+    degenerate = len(res.groups) < 2
+    if degenerate:
+        # Contraction merged every variable into one node: no Laplacian
+        # spectrum to embed with, so all units form a single cluster.
+        warnings.warn("|V*| = 1 after contraction; no spectral embedding exists and "
+                      "all units are assigned to one cluster.")
+        L = P = pi = eigvals = eigvecs = Phi = None
+        K_hat, k_star = 0, 1
+        clusters, X_emb = np.zeros(n, dtype=int), np.empty((n, 0))
+        diag = dict(k_silhouette=None, k_gap=None, sil_scores={}, gap_scores={},
+                    gap_sds={}, criteria_agree=None)
+    else:
+        # ── Step 3: Laplacian ────────────────────────────────────────────────
+        log("Step 3: Chung directed Laplacian ...")
+        L, P, pi = compute_laplacian(A_stab, alpha_pr=alpha_pr)
+        Phi, K_hat, eigvals, eigvecs = select_dimension(L)
+        gap_val = eigvals[K_hat] - eigvals[K_hat - 1] if K_hat < len(eigvals) else np.nan
+        log(f"  K_hat = {K_hat}  (gap lambda_{K_hat + 1} - lambda_{K_hat} = {gap_val:.4f})")
 
-   
-    log("Stage 1d: Orientation resolution …")
-    resolved_edges, G_nx, contracted_pairs = resolve_with_acyclicity(
-        orientations, d, ovs_matrix=ovs_matrix, domain_order=domain_order,
-    )
-    log(f"  Final DAG: {G_nx.number_of_nodes()} nodes, "
-        f"{G_nx.number_of_edges()} edges")
-    if contracted_pairs:
-        cp_names = []
-        for (i, j) in contracted_pairs:
-            ni = var_names[i] if var_names and i < len(var_names) else f"X{i}"
-            nj = var_names[j] if var_names and j < len(var_names) else f"X{j}"
-            cp_names.append(f"{ni}/{nj}")
-        log(f"  Contracted pairs: {cp_names}")
+        # ── Step 4: embedding and clustering ─────────────────────────────────
+        log("Step 4: embedding and k-means ...")
+        clusters, X_emb, k_star, diag = embed_and_cluster(X_std, Phi, k_max=k_max,
+                                                          B_ref=B_ref, seed=seed,
+                                                          gap=gap_statistic_diag)
+        log(f"  k* = {k_star} (Silhouette); Gap-statistic k = {diag['k_gap']}")
 
-    log("Stage 2: Estimating causal edge weights …")
-    A = estimate_weights(data, resolved_edges, G_nx, f_uv,
-                         alpha_reset=alpha_reset, dml_k=dml_k)
-    log(f"  A_stable range: [{A.min():.4f}, {A.max():.4f}]")
+    # ── Treatment / outcome diagnostics ──────────────────────────────────────
+    zy = None
+    if z_idx is not None and y_idx is not None:
+        gz, gy = int(res.group_of[z_idx]), int(res.group_of[y_idx])
+        merged = gz == gy
+        path = (not merged) and nx.has_path(res.G_star, gz, gy)
+        zy = dict(node_Z=gz, node_Y=gy, merged=merged, directed_path=path,
+                  A_stab_ZY=float(A_stab[gz, gy]) if not merged else np.nan,
+                  backdoor_Z=res.backdoor_members(gz, exclude=gy))
+        if merged:
+            log(f"  WARNING: treatment and outcome were merged into '{node_names[gz]}'")
+        elif not path:
+            log("  WARNING: no directed path treatment ~> outcome in G_hat; the "
+                "treatment-outcome pathway is absent from the graph")
 
-    log("Stage 3: Building Chung Laplacian …")
-    L, P, pi = compute_laplacian(A, alpha=alpha_pr)
-
-    log("Stage 3b: Selecting embedding dimension K* …")
-    V_K, K_star, eigvals = spectral_gap(L)  
-    gaps = np.diff(eigvals)
-    log(f"  K* = {K_star}  (largest non-trivial gap = "
-        f"{gaps[K_star - 1] if K_star - 1 < len(gaps) else float('nan'):.4f})")
-
-    log("Stages 4–5: Embedding and clustering …")
-    clusters, X_embed, k_star, diagnostics = embed_and_cluster(
-        data, V_K, K_star, B_ref=B_ref, seed=seed,
-    )
-    log(f"  k* = {k_star}  "
-        f"(Silhouette k={diagnostics['k_silhouette']}, "
-        f"Gap k={diagnostics['k_gap']}, "
-        f"agree={diagnostics['criteria_agree']})")
     log("Done.")
+    result = dict(
+        clusters=clusters, embedding=X_emb, X_std=X_std, adjacency=A_stab,
+        laplacian=L, laplacian_P=P, pi=pi, eigenvalues=eigvals, eigenvectors=eigvecs,
+        Phi=Phi, K_hat=K_hat, K_star=K_hat, k_star=k_star, diagnostics=diag,
+        resolution=res, groups=res.groups, node_names=node_names,
+        edges=res.final_direction, contracted_pairs=res.contracted_pairs,
+        edge_records=records, ovs_matrix=ovs_matrix, orientations=orientations,
+        f_uv=f_uv, f_dir=f_dir, g_uv=f_dir, rho=rho, B_L=B_L, n_NG=n_ng, w_L=w_L,
+        G_pc=G_pc, treatment_outcome=zy, var_names=names,
+    )
+    if visualise and not degenerate:
+        plot_spectral_diagnostics(eigvals, diag["sil_scores"], K_hat, k_star, save_dir=save_dir)
+        plot_dag(A_stab, node_names, res.merged_nodes(), save_dir=save_dir)
+        plot_tsne(Xs, clusters, k_star, K_hat, seed=seed, save_dir=save_dir)
+    return result
 
-    if visualise:
-        plot_spectral_gap(L)
-        plot_silhouette(X_embed)
-        plot_clusters(X_embed, clusters, X_orig=data_for_tsne)
-        plot_dag(A, var_names=var_names, contracted_pairs=contracted_pairs)
 
-    return {
-        "clusters"         : clusters,
-        "embedding"        : X_embed,
-        "adjacency"        : A,
-        "laplacian"        : L,
-        "laplacian_P"      : P,
-        "pi"               : pi,
-        "edges"            : resolved_edges,
-        "K_star"           : K_star,
-        "k_star"           : k_star,
-        "eigenvalues"      : eigvals,
-        "diagnostics"      : diagnostics,
-        "contracted_pairs" : contracted_pairs,      
-        "ovs_matrix"       : ovs_matrix,
-        "f_uv"             : f_uv,
-        "g_uv"             : g_uv,
-    }
+def CSC_PC_PIPELINE(data, var_names=None, tau=None, w_L_max=None, dml_k=None,
+                    visualise=True, **kwargs):
+    """Backward-compatible wrapper around :func:`caspect` that accepts the old
+    argument names (tau -> gamma, w_L_max -> w_max, dml_k -> n_fold)."""
+    if tau is not None:
+        kwargs.setdefault("gamma", tau)
+    if w_L_max is not None:
+        kwargs.setdefault("w_max", w_L_max)
+    if dml_k is not None:
+        kwargs.setdefault("n_fold", dml_k)
+    return caspect(data, var_names=var_names, visualise=visualise, **kwargs)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REPORTING HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def edge_summary(result: dict, stability_bins=(0.70, 0.90)):
+    """Node-level edge table in the style of Table 8.
+
+    One row per edge of G_hat with A_stab, the mean bootstrap inclusion
+    frequency f_uv of its member edges, a stability bin (High if
+    f >= stability_bins[1], Moderate if f >= stability_bins[0], Low otherwise;
+    the paper does not fix the cut-offs) and the estimation track.  Contracted
+    pairs are appended with their OVS.
+    """
+    import pandas as pd
+    names, node_names = result["var_names"], result["node_names"]
+    A, recs = result["adjacency"], result["edge_records"]
+    lo, hi = stability_bins
+    rows = []
+    by_node: dict = {}
+    for r in recs:
+        by_node.setdefault((r["node_u"], r["node_v"]), []).append(r)
+    for (a, b), rs in by_node.items():
+        f = float(np.mean([r["f_uv"] for r in rs]))
+        tracks = sorted({r["track"] for r in rs})
+        sym = any(r["symmetric"] for r in rs)
+        rows.append(dict(edge=f"{node_names[a]} {'<->' if sym else '->'} {node_names[b]}",
+                         A_stab=float(A[a, b]), f_uv=f,
+                         stability="High" if f >= hi else "Moderate" if f >= lo else "Low",
+                         track="+".join(tracks), n_member_edges=len(rs)))
+    df = pd.DataFrame(rows)
+    if len(df):
+        df = df.sort_values("A_stab", ascending=False).drop_duplicates("edge")
+    ovs = result["ovs_matrix"]
+    for i, j in result["contracted_pairs"]:
+        df = pd.concat([df, pd.DataFrame([dict(
+            edge=f"{names[i]} <-> {names[j]}", A_stab=np.nan, f_uv=result["f_uv"][i, j],
+            stability=f"Contracted, OVS = {ovs[i, j]:+.2f}", track="-", n_member_edges=0)])],
+            ignore_index=True)
+    return df.reset_index(drop=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  PLOTS (Figures 1-9 style)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _finish(fig, save_dir, fname):
+    import matplotlib.pyplot as plt
+    fig.tight_layout()
+    if save_dir:
+        import os
+        os.makedirs(save_dir, exist_ok=True)
+        path = os.path.join(save_dir, fname)
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[CaSPECT] figure saved -> {path}")
+    else:
+        plt.show()
+
+
+def plot_spectral_diagnostics(eigvals, sil_scores, K_hat, k_star, title=None, save_dir=None):
+    """Eigenvalue spectrum, spectral gaps (largest non-trivial gap marked) and
+    Silhouette score against k (Figures 2, 5 and 8)."""
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4))
+    ax[0].plot(eigvals, marker="o", lw=1.5)
+    ax[0].set(title="Eigenvalue Spectrum", xlabel="Index", ylabel="Eigenvalue")
+    gaps = np.diff(eigvals)
+    ax[1].plot(gaps, marker="o", color="tomato", lw=1.5)
+    ax[1].axvline(K_hat - 1, color="navy", ls="--", label=f"K* = {K_hat}  (non-trivial)")
+    ax[1].set(title="Spectral Gaps", xlabel="Index", ylabel="Gap")
+    ax[1].legend()
+    ks = sorted(sil_scores)
+    ax[2].plot(ks, [sil_scores[k] for k in ks], marker="o", lw=1.5)
+    ax[2].axvline(k_star, color="gray", ls=":", lw=1)
+    ax[2].set(title="Silhouette Score", xlabel="k", ylabel="Silhouette score")
+    from matplotlib.ticker import MaxNLocator
+    for a in ax:
+        a.grid(True)
+        a.xaxis.set_major_locator(MaxNLocator(integer=True))
+    if title:
+        fig.suptitle(title)
+    _finish(fig, save_dir, "spectral_diagnostics.png")
+
+
+def plot_dag(A, node_names, merged_nodes=(), title=None, save_dir=None):
+    """Estimated causal DAG over V* with A_stab edge labels (Figures 1, 4, 7).
+    Contracted nodes and their edges are drawn in tomato."""
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.lines import Line2D
+    m = A.shape[0]
+    merged = set(merged_nodes)
+    G = nx.DiGraph()
+    G.add_nodes_from(range(m))
+    for i in range(m):
+        for j in range(m):
+            if A[i, j] > 0:
+                G.add_edge(i, j, weight=A[i, j])
+    pos = nx.spring_layout(G, seed=42)
+    special = [(u, v) for u, v in G.edges() if u in merged or v in merged]
+    normal = [(u, v) for u, v in G.edges() if (u, v) not in special]
+    fig, ax = plt.subplots(figsize=(9, 7))
+    nx.draw_networkx_nodes(G, pos, ax=ax, node_size=900,
+                           node_color=["tomato" if i in merged else "steelblue" for i in range(m)])
+    def _wrap(name, per_line=2):
+        parts = name.split("/")
+        return "/\n".join("/".join(parts[i:i + per_line]) for i in range(0, len(parts), per_line))
+    nx.draw_networkx_labels(G, pos, ax=ax, labels={i: _wrap(nm) for i, nm in enumerate(node_names)},
+                            font_size=8, bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                                   ec="none", alpha=0.75))
+    nx.draw_networkx_edges(G, pos, ax=ax, edgelist=normal, edge_color="gray",
+                           arrows=True, arrowsize=20, width=1.5)
+    nx.draw_networkx_edges(G, pos, ax=ax, edgelist=special, edge_color="tomato",
+                           style="dashed", arrows=True, arrowsize=20, width=1.5)
+    nx.draw_networkx_edge_labels(G, pos, ax=ax, font_size=7,
+                                 edge_labels={(u, v): f"{d['weight']:.2f}"
+                                              for u, v, d in G.edges(data=True)})
+    ax.legend(handles=[mpatches.Patch(color="steelblue", label="Normal node"),
+                       mpatches.Patch(color="tomato", label="Contracted node (merged)"),
+                       Line2D([0], [0], color="gray", label="Normal edge"),
+                       Line2D([0], [0], color="tomato", ls="--", label="Contracted-node edge")],
+              loc="upper left", bbox_to_anchor=(1.0, 1.0), fontsize=8, frameon=False)
+    ax.set_title(title or "Estimated causal DAG (edge labels = bootstrap-stability-weighted |ACE|)")
+    ax.axis("off")
+    _finish(fig, save_dir, "dag.png")
+
+
+def plot_tsne(X, clusters, k_star=None, K_hat=None, seed=42, title=None, save_dir=None):
+    """t-SNE map of the standardized data coloured by cluster (Figures 3, 6, 9)."""
+    import matplotlib.pyplot as plt
+    from sklearn.manifold import TSNE
+    X2 = TSNE(n_components=2, perplexity=min(30, len(X) - 1),
+              random_state=seed).fit_transform(X)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.scatter(X2[:, 0], X2[:, 1], c=clusters, cmap="tab10", alpha=0.75, s=12,
+               vmin=0, vmax=9)
+    ax.set(xlabel="dim 1", ylabel="dim 2",
+           title=title or f"t-SNE of CaSPECT clusters (k* = {k_star}, K = {K_hat})")
+    _finish(fig, save_dir, "tsne_clusters.png")

@@ -1,8 +1,3 @@
-"""Shared reporting helpers for the empirical case studies of Section 9
-(``lalonde.py``, ``ihdp.py``, ``k401.py``)."""
-
-from __future__ import annotations
-
 import argparse
 import os
 

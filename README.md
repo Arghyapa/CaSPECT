@@ -1,7 +1,5 @@
 # CaSPECT: Discovering Causally Homogeneous Subgroups via Directed Spectral Clustering
 
-This repository contains the Python implementation of **CaSPECT (Causal Spectral Clustering)**.
-
 CaSPECT is a spectral clustering framework in which the representation of the units is derived from an **estimated causal graph over the variables** rather than from the geometry of the raw covariates. The resulting embedding is a *fixed linear map of the standardized variables whose loadings are determined by the causal topology*. CaSPECT is therefore a method for causal-graph-informed dimension reduction and subgroup discovery. It does **not** cluster unit-level counterfactual contrasts.
 
 ---

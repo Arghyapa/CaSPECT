@@ -663,7 +663,7 @@ def one_replication(
     latent_targets:  Optional[tuple] = None,
     B_boot:          int    = 100,
     alpha_ci:        float  = 0.05,
-    theta:           float  = 0.50,
+    theta:           float  = 0.55,
     tau:             float  = 0.15,
     w_L_max:         float  = 0.30,
     force_pc_only:   bool   = False,    # Ablation A1
@@ -782,7 +782,7 @@ def run_mc(
     p_edge:      float = 0.35,
     B_boot:      int   = 100,
     alpha_ci:    float = 0.05,
-    theta:       float = 0.50,
+    theta:       float = 0.55,
     tau:         float = 0.15,
     w_L_max:     float = 0.30,
     force_pc_only:bool = False,

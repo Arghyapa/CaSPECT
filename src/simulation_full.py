@@ -1,43 +1,6 @@
 """
 CaSPECT simulation study (Section 7) and baseline comparison (Section 8).
-
-Design (Section 7.1)
---------------------
-* q = 8 variables V = {X1, ..., X6, Z, Y}; Z and Y are columns 6 and 7.
-* Random topological order; each forward pair is an edge with probability
-  rho = 0.35; beta_uv ~ s_uv * Unif(0.3, 0.8) with a Rademacher sign.
-* Three planted clusters of approximately n/3 units each (multinomial sizes);
-  the cluster enters only the treatment equation through the intercept
-  eta = (-1, 0, +1), so tau_1 = tau_2 = tau_3 = tau, the total effect of Z on Y
-  (Eq. 8).  This is a propensity-shift benchmark.
-* S1  linear SEM, standardized t5 errors, n in {500, 1000, 2000}.
-* S2  as S1, but the three edges with the largest |beta| enter as
-      beta_uv * sin(pi * u).
-* S3  as S1, plus a latent H ~ N(0, 1) with coefficients zeta = 0.4 on two
-      random variables a, b in V \\ {Z, Y}.
-* Ablations (S1, n = 1000): A1 PC-only orientation (e_L = 0), A2 no stability
-  weighting (f_uv = 1), A3 symmetrization instead of contraction.
-* Baselines (S1, n = 1000): see ``baselines.py``.
-
-Metrics
--------
-ARI against the planted labels; orientation accuracy Acc_or = share of edges
-of the stable skeleton whose final direction (OVS or resolution hierarchy)
-matches G0; cluster-level Bias_c and RMSE_c of the DML estimate restricted to
-the estimated cluster that the Hungarian algorithm matches to planted
-cluster c.
-
-Usage
------
-    python simulation_full.py                       # everything (slow, Table 2 settings)
-    python simulation_full.py --part S1 --n 1000
-    python simulation_full.py --part ablation --n-jobs 8
-    python simulation_full.py --part baselines
-    python simulation_full.py --quick               # smoke test (tiny M and B)
 """
-
-from __future__ import annotations
-
 import argparse
 import os
 import sys

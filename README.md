@@ -19,8 +19,6 @@ CaSPECT is a spectral clustering framework in which the representation of the un
 * [Installation](#️-installation)
 * [Usage](#-usage)
 * [Experiments](#-experiments)
-* [Limitations](#-limitations)
-
 ---
 
 # 🔬 Overview
@@ -96,7 +94,7 @@ where $\mathbf X^{\mathrm{std}}$ has one standardized column per element of $\ma
 
 ---
 
-# 📐 Theory
+# Theory
 
 Under faithfulness, causal sufficiency, non-Gaussianity, per-edge linearity or identifiable nonlinearity, causal identification, spectral regularity and bootstrap PC consistency (Assumptions 1–7):
 

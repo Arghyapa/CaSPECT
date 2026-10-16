@@ -1,41 +1,6 @@
 """
 CaSPECT -- Causal Spectral Clustering
 =====================================
-
-Reference implementation of
-
-    A. Pratihar, S. Chakraborty, S. Das.
-    "CaSPECT: Discovering Causally Homogeneous Subgroups via Directed
-    Spectral Clustering."
-
-Section, equation, step and table numbers in the comments refer to that paper.
-
-Pipeline (Algorithm 1)
-----------------------
-Step 1  DAG formation    PC on the full sample and on B bootstrap resamples,
-                         stable skeleton S = {f_uv >= theta}, Orientation
-                         Validation Score (Eq. 2), resolution hierarchy
-                         (acyclicity filter, Meek rules R1-R4, domain ordering,
-                         edge contraction), NOTEARS acyclicity check with
-                         cycle breaking by contraction.
-Step 2  Edge weights     |ACE| of every directed edge, OLS when the RESET test
-                         does not reject linearity and cross-fitted DML (Eq. 3)
-                         otherwise; A_stab = f_uv * A_uv; merged nodes take the
-                         average of their members' entries.
-Step 3  Laplacian        PageRank transition matrix (Eq. 4), Chung's directed
-                         Laplacian (Eq. 5), K_hat = index of the largest
-                         non-trivial spectral gap.
-Step 4  Clustering       X_tilde = X_std Phi_K (Eq. 7); k-means for
-                         k in {2, ..., k_max}; k* by the Silhouette score, with
-                         the Gap statistic reported alongside.
-
-Conventions
------------
-* Variables are indexed 0..q-1.  A directed edge u -> v is stored as (u, v).
-* PC adjacency matrices: adj[u, v] = 1 and adj[v, u] = 0 means u -> v;
-  adj[u, v] = adj[v, u] = 1 means the edge is undirected.
-* B_L[u, v] is the DirectLiNGAM coefficient of u in the structural equation
-  of v (i.e. the transpose of lingam's ``adjacency_matrix_``).
 """
 
 from __future__ import annotations
@@ -93,11 +58,6 @@ DEFAULTS = dict(
     n_fold=5,          # n_fold       DML cross-fitting folds
     k_max=9,           # k_max        largest k searched
 )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  STEP 1a/1b ─ PC ALGORITHM AND BOOTSTRAP STABILITY
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _pc_causallearn(data: np.ndarray, alpha: float) -> np.ndarray:
     """PC via causal-learn, decoded into the adjacency convention above.
@@ -188,16 +148,6 @@ def run_pc(data: np.ndarray, alpha: float = 0.05) -> np.ndarray:
 
 def bootstrap_pc(data: np.ndarray, B: int = 100, alpha: float = 0.05,
                  seed: int = 42):
-    """Bootstrap PC (Step 1).
-
-    Returns
-    -------
-    f_uv  : inclusion frequency of the unordered pair (symmetric).
-    f_dir : orientation frequency, f_dir[u, v] = fraction of resamples in which
-            u -> v is returned.  Resamples that return the edge undirected count
-            towards neither direction (Assumption 7).
-    rho   : rho[u, v] = f_dir[u, v] / f_uv[u, v]  (0 where f_uv = 0).
-    """
     rng = np.random.default_rng(seed)
     n, d = data.shape
     f_count = np.zeros((d, d))
@@ -217,11 +167,6 @@ def bootstrap_pc(data: np.ndarray, B: int = 100, alpha: float = 0.05,
     with np.errstate(invalid="ignore", divide="ignore"):
         rho = np.where(f_uv > 0, f_dir / np.where(f_uv > 0, f_uv, 1.0), 0.0)
     return f_uv, f_dir, rho
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  STEP 1c ─ JARQUE-BERA, DIRECTLINGAM AND THE OVS
-# ═════════════════════════════════════════════════════════════════════════════
 
 def jarque_bera_count(data: np.ndarray, alpha_jb: float = 0.10) -> int:
     """n_NG: number of variables whose OLS residuals (each variable regressed
@@ -301,10 +246,6 @@ def compute_ovs(f_uv: np.ndarray, rho: np.ndarray, B_L: np.ndarray,
                 orientations[(i, j)] = None
     return orientations, ovs_matrix
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  STEP 1d ─ RESOLUTION HIERARCHY
-# ═════════════════════════════════════════════════════════════════════════════
 
 class _PDAG:
     """Partially directed graph over a fixed skeleton."""
@@ -460,18 +401,6 @@ def _contract(D: nx.DiGraph, uf: _UnionFind, d: int):
 def resolve_orientations(orientations: dict, d: int, ovs_matrix: np.ndarray,
                          domain_order: Optional[Sequence[int]] = None,
                          ambiguous: str = "contract") -> Resolution:
-    """Resolution hierarchy for edges with |OVS| <= gamma (Section 6, Step 1).
-
-    1. Acyclicity filter: if exactly one orientation is cycle-free, use it.
-    2. Meek rules R1-R4, applied exhaustively.
-    3. Domain or temporal ordering (``domain_order``: earliest first).
-    4. Edge contraction: merge the endpoints into a node N_S.
-       (``ambiguous="symmetrise"`` keeps them as a symmetric pair instead,
-       which is ablation A3.)
-    Acyclicity is checked after each step.  Global acyclicity of G_hat is then
-    confirmed with the NOTEARS condition; while a cycle persists, the edge of
-    that cycle with the lowest |OVS| is contracted.
-    """
     if ambiguous not in ("contract", "symmetrise"):
         raise ValueError("ambiguous must be 'contract' or 'symmetrise'")
     skeleton = sorted(orientations)
@@ -556,10 +485,6 @@ def resolve_orientations(orientations: dict, d: int, ovs_matrix: np.ndarray,
                       symmetric_pairs=symmetric)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STEP 2 ─ CAUSAL EDGE WEIGHTS
-# ═════════════════════════════════════════════════════════════════════════════
-
 def reset_test_pvalue(y: np.ndarray, X_reg: np.ndarray) -> float:
     """Ramsey RESET p-value: adds the squared and cubed fitted values of the
     OLS regression of y on X_reg and F-tests their joint significance."""
@@ -608,14 +533,6 @@ def _fit_nuisance(W_tr, y_tr, seed: int, learner: str):
 
 def dml_ace(y: np.ndarray, t: np.ndarray, W: np.ndarray, n_fold: int = 5,
             seed: int = 42, learner: str = "gam", return_se: bool = False):
-    """Cross-fitted partially linear DML estimate (Eq. 3).
-
-    The outcome regression l(w) = E[y | W] and the treatment regression
-    m(w) = E[t | W] are fitted on the complement of each fold (GAM, or a random
-    forest if the GAM fails or ``learner="rf"``); the estimate is
-    sum(R_t R_y) / sum(R_t^2) of the cross-fitted residuals.  With
-    ``return_se`` the influence-function standard error is returned as well.
-    """
     y = np.asarray(y, float)
     t = np.asarray(t, float)
     W = np.asarray(W, float).reshape(len(y), -1)
@@ -658,17 +575,6 @@ def edge_ace(data: np.ndarray, u: int, v: int, W_idx: Sequence[int],
 
 def estimate_edge_weights(data: np.ndarray, res: Resolution, f_weight: np.ndarray,
                           alpha_reset: float = 0.05, n_fold: int = 5, seed: int = 42):
-    """Stability-weighted adjacency matrix A_stab over V* (Step 2).
-
-    Every original directed edge u -> v gets A_stab_uv = f_uv * |tau_hat_uv|,
-    with the backdoor set read off G_hat (members of the parents of u's node).
-    A merged node N_S takes the average over S of its members' entries
-    (absent edges count as 0); between two merged nodes the average runs over
-    both member sets.  Symmetric pairs (ablation A3) receive
-    A_uv = A_vu = f_uv * (|tau_uv| + |tau_vu|) / 2  (Remark 3).
-
-    Returns (A_stab, records), where records holds one dict per member edge.
-    """
     m = len(res.groups)
     A = np.zeros((m, m))
     records = []
@@ -701,9 +607,6 @@ def estimate_edge_weights(data: np.ndarray, res: Resolution, f_weight: np.ndarra
     return A, records
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STEP 3 ─ CHUNG DIRECTED LAPLACIAN AND SPECTRAL DECOMPOSITION
-# ═════════════════════════════════════════════════════════════════════════════
 
 def transition_matrix(A: np.ndarray, alpha_pr: float = 0.15) -> np.ndarray:
     """Eq. (4): P = (1 - alpha_PR) D^{-1} A + (alpha_PR / |V*|) 11^T, with
@@ -718,20 +621,12 @@ def transition_matrix(A: np.ndarray, alpha_pr: float = 0.15) -> np.ndarray:
 
 
 def stationary_distribution(P: np.ndarray) -> np.ndarray:
-    """pi with pi^T P = pi^T and sum(pi) = 1 (unique since alpha_PR > 0)."""
     vals, vecs = eig(P.T)
     pi = np.abs(np.real(vecs[:, np.argmin(np.abs(vals - 1.0))]))
     return pi / pi.sum()
 
 
 def compute_laplacian(A: np.ndarray, alpha_pr: float = 0.15):
-    """Chung's directed Laplacian (Eq. 5):
-
-        L = I - 1/2 (Pi^{1/2} P Pi^{-1/2} + Pi^{-1/2} P^T Pi^{1/2}).
-
-    L is symmetric positive semi-definite with lambda_1 = 0 and eigenvector
-    proportional to pi^{1/2}.  Returns (L, P, pi).
-    """
     P = transition_matrix(A, alpha_pr)
     pi = stationary_distribution(P)
     s = np.sqrt(pi)
@@ -817,9 +712,6 @@ def embed_and_cluster(X_std: np.ndarray, Phi: np.ndarray, k_max: int = 9,
     return relabel_by_size(clusters), X_emb, k_star, diagnostics
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  FULL PIPELINE
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _as_index(x, names):
     if x is None:
@@ -839,29 +731,6 @@ def caspect(data, var_names: Optional[Sequence[str]] = None,
             symmetrise: bool = False, gap_statistic_diag: bool = True,
             visualise: bool = False, save_dir: Optional[str] = None,
             verbose: bool = True) -> dict:
-    """Run CaSPECT (Algorithm 1) on an n x q data matrix.
-
-    Parameters (see Table 2 for the defaults)
-    ----------
-    data         : array (n, q) with the covariates, the treatment Z and the
-                   outcome Y as columns.
-    var_names    : column names (used for logging, plots and ``domain_order``).
-    treat_idx, outcome_idx : optional index or name of Z and Y; only used for
-                   diagnostics (whether Z and Y were merged, whether a
-                   directed path Z ~> Y survives in G_hat).
-    domain_order : optional list of indices or names, earliest first, used in
-                   Step 3 of the resolution hierarchy.
-    pc_only      : ablation A1, e_L = 0 for all edges.
-    no_stability : ablation A2, f_uv = 1 for every pair seen in any resample.
-    symmetrise   : ablation A3, symmetrize residual ambiguous edges instead of
-                   contracting them.
-    gap_statistic_diag : compute the Gap statistic (slow on large n).
-    visualise    : draw Figures 1-3 style plots; saved to ``save_dir`` if given.
-
-    Returns a dict with, among others, ``clusters`` (labelled by decreasing
-    size), ``embedding``, ``adjacency`` (A_stab over V*), ``laplacian``,
-    ``K_hat``, ``k_star``, ``resolution`` and ``edge_records``.
-    """
     def log(msg):
         if verbose:
             print(f"[CaSPECT] {msg}")
@@ -994,19 +863,8 @@ def CSC_PC_PIPELINE(data, var_names=None, tau=None, w_L_max=None, dml_k=None,
     return caspect(data, var_names=var_names, visualise=visualise, **kwargs)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  REPORTING HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
-
 def edge_summary(result: dict, stability_bins=(0.70, 0.90)):
-    """Node-level edge table in the style of Table 8.
 
-    One row per edge of G_hat with A_stab, the mean bootstrap inclusion
-    frequency f_uv of its member edges, a stability bin (High if
-    f >= stability_bins[1], Moderate if f >= stability_bins[0], Low otherwise;
-    the paper does not fix the cut-offs) and the estimation track.  Contracted
-    pairs are appended with their OVS.
-    """
     import pandas as pd
     names, node_names = result["var_names"], result["node_names"]
     A, recs = result["adjacency"], result["edge_records"]
@@ -1034,10 +892,6 @@ def edge_summary(result: dict, stability_bins=(0.70, 0.90)):
             ignore_index=True)
     return df.reset_index(drop=True)
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  PLOTS (Figures 1-9 style)
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _finish(fig, save_dir, fname):
     import matplotlib.pyplot as plt

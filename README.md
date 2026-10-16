@@ -11,7 +11,6 @@ CaSPECT is a spectral clustering framework in which the representation of the un
 * [Overview](#-overview)
 * [What CaSPECT estimates](#-what-caspect-estimates)
 * [Method](#-method)
-* [Theory](#-theory)
 * [Hyperparameters](#-hyperparameters)
 * [Repository Structure](#-repository-structure)
 * [Installation](#️-installation)
@@ -87,20 +86,6 @@ $$\hat K = \arg\max_{2\le j\le |\mathbf V^*|-1}(\hat\lambda_{j+1}-\hat\lambda_j)
 $$\tilde{\mathbf X} = \mathbf X^{\mathrm{std}}\,\hat{\boldsymbol\Phi}_{\hat K}\in\mathbb R^{n\times\hat K}\quad\text{(Eq. 7)},$$
 
 where $\mathbf X^{\mathrm{std}}$ has one standardized column per element of $\mathbf V^*$; a merged node is the element-wise average of its members' standardized columns. $k$-means is run for $k\in\{2,\dots,k_{\max}\}$. $k^*$ maximizes the Silhouette score, and the Gap statistic is reported alongside.
-
----
-
-# Theory
-
-Under faithfulness, causal sufficiency, non-Gaussianity, per-edge linearity or identifiable nonlinearity, causal identification, spectral regularity and bootstrap PC consistency (Assumptions 1–7):
-
-* **Proposition 1 (OVS consistency).** On a compelled edge, $\mathbb P[\mathrm{OVS}_{uv}>\gamma]\to1$. If Assumption 3 fails, the same holds provided $w_L<(1-\gamma)/2$. On a reversible edge it holds provided $w_L>\gamma$. Asymptotically, no edge reaches the resolution hierarchy.
-* **Theorem 1 and Corollary 1.** $\hat A^{\mathrm{stab}}_{uv}\xrightarrow{p}|\tau_{u\rightsquigarrow v}|$ for every true edge, and $\hat A^{\mathrm{stab}}_{uv}\xrightarrow{p}0$ for spurious pairs retained at finite $n$.
-* **Theorem 2.** The skeleton, orientation, edge weights, Laplacian, selected dimension and eigenspace are **consistent in probability**, with $\lVert\sin\Theta(\boldsymbol\Phi_{K_0},\hat{\boldsymbol\Phi}_{\hat K})\rVert_F=\mathcal O_p(q\,r_n/\delta_{K_0})$.
-
-The theorem does **not** cover the final $k$-means partition or the choice of $k^*$. Bound (1) on false selections is used only as a heuristic motivation for thresholding at $\theta$.
-
-The pipeline prints whether the configured $w_L$ satisfies the conditions of Proposition 1.
 
 ---
 

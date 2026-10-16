@@ -115,7 +115,6 @@ The defaults are the configuration used throughout the paper (Table 2):
 ```text
 ├── LICENSE
 ├── README.md
-├── CHANGELOG.md            what changed to bring the code in line with the paper
 ├── requirements.txt
 ├── Images/                 DAG figures (LaLonde, IHDP, 401(k))
 ├── datasets/
@@ -125,7 +124,6 @@ The defaults are the configuration used throughout the paper (Table 2):
 └── src/
     ├── caspect.py          the CaSPECT pipeline (Algorithm 1) and plots
     ├── simulation_full.py  simulation study (Section 7: Tables 3–6) + baselines (Table 7)
-    ├── baselines.py        comparators for Section 8
     ├── analysis_utils.py   shared reporting for the case studies
     ├── lalonde.py          Section 9.1 (Tables 8–10, Figures 1–3)
     ├── ihdp.py             Section 9.2 (Figures 4–6)

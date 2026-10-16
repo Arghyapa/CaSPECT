@@ -65,8 +65,6 @@ CaSPECT should be useful when the treatment-relevant structure among the units i
   3. *Domain or temporal ordering* (`domain_order`).
   4. *Edge contraction.* Merge $u$ and $v$ into a node $N_S$, labelled by its members (e.g. `re74/re75`).
 
-  Global acyclicity of $\hat G$ is then confirmed with the NOTEARS condition $\operatorname{tr}(e^{W\circ W})-d=0$. If a cycle persists, the edge of that cycle with the lowest $|\mathrm{OVS}|$ is contracted.
-
 ### Step 2: Causal edge weights
 
 * For each directed edge $u\to v$, the backdoor set $\mathbf W_{uv}$ is read off $\hat G$ (the parents of $u$'s node). A RESET test at level $\alpha_{\mathrm{RESET}}$ routes the edge either to **OLS** (the coefficient on $u$ in the regression of $v$ on $u$ and $\mathbf W_{uv}$) or to **DML** with $n_{\mathrm{fold}}$-fold cross-fitting and GAM or random-forest nuisances:

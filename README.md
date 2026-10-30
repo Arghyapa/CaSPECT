@@ -35,7 +35,7 @@ CaSPECT should be useful when the treatment-relevant structure among the units i
 * Run PC at level $\alpha_n$ to get a CPDAG, then re-run PC on $B$ bootstrap resamples. Record the inclusion frequency $f_{uv}$ (the fraction of resamples in which $u$ and $v$ are adjacent; $f_{uv}=f_{vu}$) and the orientation frequency $f^{\to}_{uv}$ (the fraction in which $u\to v$ is returned). A resample that returns the edge undirected counts towards neither direction. Only edges with $f_{uv}\ge\theta$ enter the stable skeleton $\hat{\mathcal S}$.
 * A per-variable Jarque–Bera test ($\alpha_{\mathrm{JB}}$) on OLS residuals gives $n_{\mathrm{NG}}$, the number of variables that reject Gaussianity. The LiNGAM weight is
 
-  $$w_L = \frac{n_{\mathrm{NG}}}{q}\,w_{\max},\qquad w_{\mathrm{PC}} = 1-w_L .$$
+  $$w_L = \frac{n_{\mathrm{NG}}}{q}w_{\max},\qquad w_{\mathrm{PC}} = 1-w_L .$$
 
 * **Orientation Validation Score** (Eq. 2), for each edge in $\hat{\mathcal S}$:
 

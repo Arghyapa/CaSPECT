@@ -7,7 +7,6 @@ CaSPECT is a spectral clustering framework in which the representation of the un
 ## 📖 Table of Contents
 
 * [Overview](#-overview)
-* [What CaSPECT estimates](#-what-caspect-estimates)
 * [Method](#-method)
 * [Hyperparameters](#-hyperparameters)
 * [Repository Structure](#-repository-structure)

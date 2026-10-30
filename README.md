@@ -29,15 +29,6 @@ CaSPECT should be useful when the treatment-relevant structure among the units i
 
 ---
 
-# What CaSPECT estimates
-
-* **Population target (Definition 1).** The population CaSPECT embedding is the linear map $\mathbf s \mapsto \boldsymbol\Phi_{K_0}^{\top}\mathbf s$, where $\mathbf s$ is the vector of standardized variables and $\boldsymbol\Phi_{K_0}$ holds the $K_0$ leading non-trivial eigenvectors of the population Chung Laplacian $L_0$. The population partition is the $k$-means partition of the law of $\boldsymbol\Phi_{K_0}^{\top}\mathbf s$.
-* **Causally homogeneous subgroups (Definition 2).** A partition is $\varepsilon$-causally homogeneous if $\sum_j \frac{|C_j|}{n}\widehat{\mathrm{Var}}_{C_j}(\tau(x_i)) \le \varepsilon$.
-* **Alignment condition (Proposition 2).** If $|\tau(x_i)-\tau(x_{i'})| \le M\lVert\tilde{\mathbf x}_i-\tilde{\mathbf x}_{i'}\rVert$, then $\sum_j \frac{|C_j|}{n}\widehat{\mathrm{Var}}_{C_j}(\tau) \le \frac{M^2}{n}\,\mathrm{WCSS}$. Compact clusters in the embedding are homogeneous in effect *only* under this (unverifiable) condition.
-* **Treatment and outcome are projected.** $\mathbf X^{\mathrm{std}}$ contains the $Z$ and $Y$ columns, so a partition can reflect treatment assignment or observed outcomes directly. Clusters are **descriptive** subgroups, and within-cluster effect estimates are conditional on a data-dependent partition.
-
----
-
 # Method
 
 ### Step 1: DAG formation

@@ -163,9 +163,7 @@ Ablations: `pc_only=True` (A1, $e^L_{uv}=0$), `no_stability=True` (A2, $f_{uv}=1
 ```bash
 cd src
 python lalonde.py            # Section 9.1
-python ihdp.py               # Section 9.2
-python k401.py               # Section 9.3
-python lalonde.py --help     # --B, --theta, --gamma, --w-max, --seed, --no-gap, --no-plots, --fig-dir
+
 ```
 
 ### Simulation study
@@ -174,9 +172,6 @@ python lalonde.py --help     # --B, --theta, --gamma, --w-max, --seed, --no-gap,
 cd src
 python simulation_full.py                         # Tables 3-7 with M = 100 (several hours on one core)
 python simulation_full.py --part S1 --n 1000      # one setting / sample size
-python simulation_full.py --part ablation --n-jobs 8
-python simulation_full.py --part baselines
-python simulation_full.py --quick                 # smoke test
 ```
 
 Outputs, including per-replication CSVs, summaries and `simulation_results.png`, are written to `--out-dir` (default `simulation_output/`).
@@ -205,8 +200,6 @@ The metrics are:
 
 All methods share the $k$-selection rule, the DML estimator and the matching. The baseline table reports $z=\Delta/\mathrm{SE}(\Delta)$ for $\Delta=\mathrm{ARI}_{\text{method}}-\mathrm{ARI}_{\text{CaSPECT}}$.
 
-> **Note.** This release corrects the decoding of edge directions (see `CHANGELOG.md`). The orientation accuracy it produces is therefore not comparable with the values in the current tables of the paper.
-
 ## LaLonde CPS1 (Section 9.1)
 
 The data are 185 NSW treated units and 15,992 CPS controls, with earnings on the $\log(1+y)$ scale. The paper reports a two-cluster partition. Cluster 1 holds 13,047 units, all controls, so positivity fails there. Cluster 2 holds all 185 treated units and 2,945 controls. Within Cluster 2 the naive effect estimate changes sign:
@@ -219,7 +212,6 @@ The data are 185 NSW treated units and 15,992 CPS controls, with earnings on the
 
 This is an **exploratory** finding about overlap, not confirmatory causal evidence. The partition depends on `treat` and `re78`, and no covariate-balance or overlap diagnostics are reported.
 
-> **Reproducibility note.** The published partition was produced by the previous code, which decoded edge directions in reverse. With the corrected decoding in this release, `lalonde.py` gives a different graph, with `treat` contracted into a merged node, and five clusters. See `CHANGELOG.md`, section G.
 
 ## IHDP (Section 9.2)
 
@@ -228,7 +220,5 @@ The data are NPCI replicate 1: 25 covariates plus a treatment, with the outcome 
 ## 401(k) (Section 9.3)
 
 The treatment is `e401` and the outcome is `net_tfa` (signed-log in the pipeline), with ten covariates. A standalone DML cross-check of the global ACE (the paper reports \$8,795, 95% CI [\$7,827, \$9,762]) and of the cluster-level ACEs is run outside the DAG. In the reported run, `pira` and `e401` were contracted, which removed the treatment–outcome pathway from the graph. The pipeline now warns when this happens. With the corrected direction decoding in this release, that contraction does not occur and `e401 → net_tfa` stays in the graph.
-
-> Numbers quoted in this section are those reported in the paper. Rerunning the scripts in this release may give different values (see `CHANGELOG.md`).
 
 ---

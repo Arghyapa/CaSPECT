@@ -116,8 +116,6 @@ The defaults are the configuration used throughout the paper (Table 2):
     ├── simulation_full.py  simulation study (Section 7: Tables 3–6) + baselines (Table 7)
     ├── analysis_utils.py   shared reporting for the case studies
     ├── lalonde.py          Section 9.1 (Tables 8–10, Figures 1–3)
-    ├── ihdp.py             Section 9.2 (Figures 4–6)
-    └── k401.py             Section 9.3 (Figures 7–9)
 ```
 
 ---

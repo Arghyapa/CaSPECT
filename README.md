@@ -115,7 +115,7 @@ The defaults are the configuration used throughout the paper (Table 2):
     ├── caspect.py          the CaSPECT pipeline (Algorithm 1) and plots
     ├── simulation_full.py  simulation study (Section 7: Tables 3–6) + baselines (Table 7)
     ├── analysis_utils.py   shared reporting for the case studies
-    ├── lalonde.py          Section 9.1 (Tables 8–10, Figures 1–3)
+    └── lalonde.py          Section 9.1 (Tables 8–10, Figures 1–3)
 ```
 
 ---

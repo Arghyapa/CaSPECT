@@ -83,7 +83,7 @@ The defaults are the configuration used throughout the paper (Table 2):
 
 | Symbol | Argument | Meaning | Value |
 |---|---|---|---|
-| $M$ | `--M` | Monte Carlo replications (simulation) | 100 |
+| $M$ | `M` | Monte Carlo replications (simulation) | 100 |
 | $B$ | `B` | Bootstrap resamples for PC | 100 |
 | $\alpha_n$ | `alpha_ci` | PC conditional-independence level | 0.05 |
 | $\theta$ | `theta` | Skeleton stability threshold | 0.55 |

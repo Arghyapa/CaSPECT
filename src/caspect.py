@@ -22,9 +22,6 @@ from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 from statsmodels.stats.stattools import jarque_bera
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Optional dependencies
-# ─────────────────────────────────────────────────────────────────────────────
 try:
     from pygam import LinearGAM, s as gam_s
     HAS_GAM = True
@@ -211,21 +208,6 @@ def lingam_weight(n_ng: int, q: int, w_max: float = 0.20) -> float:
 def compute_ovs(f_uv: np.ndarray, rho: np.ndarray, B_L: np.ndarray,
                 w_L: float, gamma: float = 0.15, theta: float = 0.55,
                 use_lingam: bool = True):
-    """Orientation Validation Score (Eq. 2) on the stable skeleton.
-
-        OVS_uv = w_PC * f_uv * e_PC + w_L * e_L,       w_PC = 1 - w_L,
-        e_PC   = rho_uv - rho_vu,
-        e_L    = sign(|B_L_uv| - |B_L_vu|).
-
-    ``use_lingam=False`` forces e_L = 0 for every edge while keeping
-    w_PC = 1 - w_L (ablation A1, Section 7).
-
-    Returns
-    -------
-    orientations : {(i, j): (u, v) or None} for every (i < j) in the stable
-                   skeleton S = {f_uv >= theta}; None means |OVS| <= gamma.
-    ovs_matrix   : antisymmetric matrix with ovs_matrix[i, j] = OVS_ij.
-    """
     w_pc = 1.0 - w_L
     d = f_uv.shape[0]
     ovs_matrix = np.zeros((d, d))

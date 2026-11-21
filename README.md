@@ -155,14 +155,6 @@ edge_summary(result)      # Table 8 style edge list
 
 Ablations: `pc_only=True` (A1, $e^L_{uv}=0$), `no_stability=True` (A2, $f_{uv}=1$), `symmetrise=True` (A3, symmetrization instead of contraction). The old entry point `CSC_PC_PIPELINE` is kept as a wrapper and accepts the old argument names (`tau`, `w_L_max`, `dml_k`).
 
-### Case studies
-
-```bash
-cd src
-python lalonde.py            # Section 9.1
-
-```
-
 ### Simulation study
 
 ```bash

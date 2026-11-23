@@ -1,6 +1,5 @@
 """
 CaSPECT -- Causal Spectral Clustering
-=====================================
 """
 
 from __future__ import annotations
@@ -42,7 +41,6 @@ except ImportError:  # pragma: no cover
     HAS_CAUSALLEARN = False
 
 
-# Hyperparameters used throughout the paper (Table 2).
 DEFAULTS = dict(
     alpha_ci=0.05,     # alpha_n      PC conditional-independence level
     B=100,             # B            bootstrap resamples for PC
@@ -57,12 +55,6 @@ DEFAULTS = dict(
 )
 
 def _pc_causallearn(data: np.ndarray, alpha: float) -> np.ndarray:
-    """PC via causal-learn, decoded into the adjacency convention above.
-
-    causal-learn encodes i -> j as G[i, j] = -1 and G[j, i] = 1, and i -- j as
-    G[i, j] = G[j, i] = -1.  A bidirected mark (both +1, conflicting
-    v-structures) is treated as undirected.
-    """
     cg = _cl_pc(data, alpha=alpha, indep_test=_cl_fisherz, uc_rule=0,
                 uc_priority=2, mvpc=False, verbose=False, show_progress=False)
     G = cg.G.graph
@@ -71,11 +63,11 @@ def _pc_causallearn(data: np.ndarray, alpha: float) -> np.ndarray:
     for i in range(d):
         for j in range(i + 1, d):
             a, b = G[i, j], G[j, i]
-            if a == -1 and b == 1:          # i -> j
+            if a == -1 and b == 1:         
                 adj[i, j] = 1
-            elif a == 1 and b == -1:        # j -> i
+            elif a == 1 and b == -1:        
                 adj[j, i] = 1
-            elif a != 0 or b != 0:          # i -- j  (or i <-> j)
+            elif a != 0 or b != 0:         
                 adj[i, j] = adj[j, i] = 1
     return adj
 
@@ -134,7 +126,7 @@ def pc_simple(data: np.ndarray, alpha: float = 0.05) -> np.ndarray:
 
 
 def run_pc(data: np.ndarray, alpha: float = 0.05) -> np.ndarray:
-    """Run PC at level alpha and return the PC adjacency matrix (see module doc)."""
+    """Run PC at level alpha and return the PC adjacency matrix."""
     if HAS_CAUSALLEARN:
         try:
             return _pc_causallearn(data, alpha)
@@ -183,12 +175,6 @@ def jarque_bera_count(data: np.ndarray, alpha_jb: float = 0.10) -> int:
 
 
 def run_lingam(data: np.ndarray, seed: Optional[int] = None) -> np.ndarray:
-    """DirectLiNGAM coefficients in the paper's orientation, B_L[u, v] = B_vu.
-
-    lingam's ``adjacency_matrix_`` follows x = Bx + e, where B[v, u] is the
-    coefficient of x_u in the equation of x_v; we return its transpose so that
-    B_L[u, v] refers to the edge u -> v (Section 6, Step 1).
-    """
     d = data.shape[1]
     if not HAS_LINGAM:
         warnings.warn("lingam is not installed; the LiNGAM term of the OVS is set to 0.")
@@ -246,7 +232,6 @@ class _PDAG:
         return frozenset((a, b)) in self.U
 
     def creates_cycle(self, a, b) -> bool:
-        """Would adding a -> b close a directed cycle?"""
         return nx.has_path(self.D, b, a)
 
     def orient(self, a, b):
@@ -264,13 +249,9 @@ class _PDAG:
 
 
 def _meek_rule(p: _PDAG, a: int, b: int) -> int:
-    """Return the Meek rule (1-4) that orients the undirected edge a -- b as
-    a -> b, or 0 if none applies."""
-    # R1: c -> a, c and b non-adjacent.
     for c in p.D.predecessors(a):
         if c != b and not p.adjacent(c, b):
             return 1
-    # R2: a -> c -> b.
     for c in p.D.successors(a):
         if p.D.has_edge(c, b):
             return 2
@@ -628,7 +609,7 @@ def select_dimension(L: np.ndarray):
     if m == 2:
         K = 1
     else:
-        gaps = np.diff(eigvals)                 # gaps[j-1] = lambda_{j+1} - lambda_j
+        gaps = np.diff(eigvals)               
         js = np.arange(2, m)
         K = int(js[np.argmax(gaps[js - 1])])
     return eigvecs[:, 1:K + 1], K, eigvals, eigvecs
@@ -639,15 +620,11 @@ def select_dimension(L: np.ndarray):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def build_X_std(data: np.ndarray, groups: Sequence[Sequence[int]]) -> np.ndarray:
-    """Column-standardized data over V*: each merged node N_S is the
-    element-wise average of the standardized columns in S."""
     Z = StandardScaler().fit_transform(np.asarray(data, float))
     return np.column_stack([Z[:, list(g)].mean(axis=1) for g in groups])
 
 
 def gap_statistic(X: np.ndarray, k: int, B_ref: int = 50, seed: int = 42):
-    """Gap statistic of Tibshirani et al. with uniform reference data over the
-    bounding box of X.  Returns (Gap(k), s_k)."""
     rng = np.random.default_rng(seed)
     wk = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(X).inertia_
     lo, hi = X.min(axis=0), X.max(axis=0)

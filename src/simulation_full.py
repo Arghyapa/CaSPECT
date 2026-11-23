@@ -22,7 +22,6 @@ try:
 except ImportError:  # pragma: no cover
     tabulate = None
 
-# Table 2 plus the DGP constants of Section 7.1
 CONFIG = dict(DEFAULTS, M=100, q=8, treat_idx=6, outcome_idx=7, p_edge=0.35,
               eta=(-1.0, 0.0, 1.0), zeta=0.4, n_nonlinear=3, min_cluster=20)
 
@@ -171,9 +170,6 @@ def matched_errors(X, est_labels, true_labels, tau, z, y, W_idx, cfg, seed):
                      for c in range(3)])
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ONE REPLICATION
-# ═════════════════════════════════════════════════════════════════════════════
 
 def one_replication(setting: str, n: int, m: int, cfg: dict, ablation: Optional[dict] = None,
                     base_seed: int = 0) -> dict:
